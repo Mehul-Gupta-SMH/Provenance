@@ -1,0 +1,30 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# ORM + schema
+sqlmodel==0.0.22
+pydantic==2.10.3
+pydantic-settings==2.7.0
+
+# Migrations
+alembic==1.14.0
+
+# LLM providers
+anthropic==0.40.0
+openai==1.57.4
+google-generativeai==0.8.3
+
+# Demand signals
+pytrends==4.9.2
+
+# HTTP
+httpx==0.28.1
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1
+
+# Utilities
+python-dotenv==1.0.1
