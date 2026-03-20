@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "provenance"
+version = "0.1.0"
+description = "Trace why LLMs recommend what they do."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.32.1",
+    "sqlmodel==0.0.22",
+    "pydantic==2.10.3",
+    "pydantic-settings==2.7.0",
+    "alembic==1.14.0",
+    "anthropic==0.40.0",
+    "openai==1.57.4",
+    "google-generativeai==0.8.3",
+    "pytrends==4.9.2",
+    "httpx==0.28.1",
+    "python-dotenv==1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+    "httpx==0.28.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["provenance*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
