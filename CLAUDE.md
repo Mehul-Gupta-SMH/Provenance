@@ -36,6 +36,55 @@ These are non-negotiable. Do not violate them.
 
 ---
 
+## Extensibility Architecture
+
+### The join key hierarchy
+
+Every data point in the system anchors to one of three keys:
+
+```
+Experiment                          ← grouping layer (cross-run comparison)
+    └── Run (experiment_id)         ← per-entity pipeline execution
+            └── QueryProbe          ← atomic observation unit ("entry")
+                    └── entry_id    ← universal FK used by all per-probe signal tables
+```
+
+### Signal table rules
+
+| Signal scope | FK to use | Examples |
+|---|---|---|
+| Per-probe (per LLM call) | `entry_id → query_probe.id` | LLMSignal, Citation |
+| Per-run (per pipeline execution) | `run_id → run.id` | DemandSignal, DivergenceScore |
+| Per-entity (entity-level) | `entity_id → entity.id` | (future: AuthoritySignal) |
+
+**Always use `entry_id` (not `probe_id`) when referencing `query_probe.id`.** This naming is the stable join contract.
+
+### Adding a new signal family (the right way)
+
+1. Create `provenance/models/my_signal.py` with FK to `entry_id`, `run_id`, or `entity_id`
+2. Add an Alembic migration
+3. Implement `collectors/my_collector.py` extending `BaseCollector`
+4. Register in `core/registry.py`
+5. Write rows in `core/pipeline.py`
+
+**Do not** add columns to existing tables for new signal types. New signal families always get their own table.
+
+### DataPoint — the ever-expanding store
+
+For signals that don't warrant a structured table, write to `DataPoint`:
+```python
+DataPoint(
+    entry_id=probe.id,
+    signal_family="social",
+    signal_key="reddit_mention_count",
+    signal_value=42.0,
+    collector_name="reddit_collector",
+)
+```
+No migration needed. New collectors can start writing immediately.
+
+---
+
 ## Project Structure
 
 ```

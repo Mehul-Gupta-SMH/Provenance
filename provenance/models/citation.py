@@ -7,7 +7,8 @@ class Citation(SQLModel, table=True):
     __tablename__ = "citation"
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    probe_id: int = Field(foreign_key="query_probe.id", index=True)
+    # entry_id is the universal join key — references query_probe.id (the atomic observation)
+    entry_id: int = Field(foreign_key="query_probe.id", index=True)
 
     cited_url: str
     domain: str
