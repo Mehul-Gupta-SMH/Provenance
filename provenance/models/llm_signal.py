@@ -6,7 +6,8 @@ class LLMSignal(SQLModel, table=True):
     __tablename__ = "llm_signal"
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    probe_id: int = Field(foreign_key="query_probe.id", index=True)
+    # entry_id is the universal join key — references query_probe.id (the atomic observation)
+    entry_id: int = Field(foreign_key="query_probe.id", index=True)
     entity_id: int = Field(foreign_key="entity.id", index=True)
 
     # Recommendation signals
