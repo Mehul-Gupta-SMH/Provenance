@@ -1,10 +1,16 @@
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Index
 from typing import Optional
 from datetime import datetime
 
 
 class QueryProbe(SQLModel, table=True):
     __tablename__ = "query_probe"
+    # Composite index for the primary read pattern: all probes for a run, filtered by variant
+    __table_args__ = (
+        Index("ix_query_probe_run_variant", "run_id", "query_variant"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
 
     # Run linkage
