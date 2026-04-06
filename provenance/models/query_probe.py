@@ -18,6 +18,7 @@ class QueryProbe(SQLModel, table=True):
 
     # Query context
     query_variant: str   # "direct" | "comparative" | "expert" | "contrarian"
+    perturbation_index: int = 0  # 0 = canonical; 1+ = surface rephrasing for variance study
     query_text: str
     raw_response: str = ""
 
