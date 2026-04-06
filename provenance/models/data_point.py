@@ -1,4 +1,5 @@
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Index
 from typing import Optional
 from datetime import datetime
 
@@ -23,6 +24,11 @@ class DataPoint(SQLModel, table=True):
         signal_family="social",    signal_key="hn_points",             signal_value=312
     """
     __tablename__ = "data_point"
+    # Composite index for EAV lookups: "all reddit_mention_count values across runs"
+    __table_args__ = (
+        Index("ix_data_point_family_key", "signal_family", "signal_key"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
 
     # Join keys — at least one must be set
