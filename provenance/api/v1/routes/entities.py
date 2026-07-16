@@ -1,10 +1,16 @@
 """Entity CRUD routes. No business logic here — everything delegates to entity_service."""
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
+from provenance.core.analysis import (
+    EntityFingerprint,
+    EntityNotFoundError,
+    FingerprintBuilder,
+    NoCompletedRunError,
+)
 from provenance.models.database import get_session
 from provenance.models.entity import EntityCreate, EntityRead, EntityUpdate, entity_to_read
 from provenance.services import entity_service
@@ -50,6 +56,26 @@ def update_entity(
             detail={"error": "ENTITY_NOT_FOUND", "detail": f"Entity {entity_id} not found"},
         )
     return entity_to_read(entity)
+
+
+@router.get("/{entity_id}/fingerprint", response_model=EntityFingerprint)
+def get_entity_fingerprint(
+    entity_id: int,
+    run_id: Optional[int] = Query(default=None),
+    session: Session = Depends(get_session),
+) -> EntityFingerprint:
+    try:
+        return FingerprintBuilder(session).build(entity_id, run_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "ENTITY_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+    except NoCompletedRunError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_COMPLETED", "detail": str(exc)},
+        ) from exc
 
 
 @router.delete("/{entity_id}")

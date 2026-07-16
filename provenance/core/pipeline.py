@@ -29,6 +29,7 @@ from sqlmodel import Session
 
 from provenance.collectors.citation import CitationExtractor
 from provenance.config import Settings
+from provenance.core.divergence import DivergenceEngine
 from provenance.core.registry import CollectorRegistry, ProbeRegistry
 from provenance.models.citation import Citation
 from provenance.models.demand_signal import DemandSignal
@@ -101,6 +102,13 @@ class RunPipeline:
             run.completed_at = datetime.utcnow()
             self.session.add(run)
             self.session.commit()
+
+            try:
+                DivergenceEngine(self.session).compute_for_run(run.id)
+            except Exception:
+                # Divergence is a read-time derived cache — a failure here must
+                # never mark an otherwise-completed run as failed.
+                logger.exception("Divergence computation failed for run %s", run_id)
 
         except Exception as e:  # unrecoverable — only path besides entity-missing/all-failed
             logger.exception("Pipeline failed for run %s", run_id)

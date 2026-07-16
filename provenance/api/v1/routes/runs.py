@@ -7,10 +7,12 @@ No business logic here — everything delegates to run_service. Pipeline executi
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from provenance.config import Settings, get_settings
+from provenance.core.divergence import DivergenceEngine, RunNotFoundError
 from provenance.models.database import engine, get_session
+from provenance.models.divergence_score import DivergenceScore
 from provenance.models.run import Run, RunCreate, RunRead
 from provenance.services import run_service
 from provenance.services.run_service import EntityNotFoundError, ExperimentNotFoundError
@@ -81,3 +83,28 @@ def list_runs(
     session: Session = Depends(get_session),
 ) -> List[Run]:
     return run_service.list_runs(session, entity_id=entity_id, skip=skip, limit=limit)
+
+
+@router.post("/{run_id}/divergence", response_model=DivergenceScore)
+def compute_divergence(run_id: int, session: Session = Depends(get_session)) -> DivergenceScore:
+    try:
+        return DivergenceEngine(session).compute_for_run(run_id)
+    except RunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+
+
+@router.get("/{run_id}/divergence", response_model=DivergenceScore)
+def get_divergence(run_id: int, session: Session = Depends(get_session)) -> DivergenceScore:
+    score = session.exec(select(DivergenceScore).where(DivergenceScore.run_id == run_id)).first()
+    if score is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "DIVERGENCE_NOT_FOUND",
+                "detail": f"No divergence score for run {run_id}",
+            },
+        )
+    return score
