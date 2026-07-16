@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, List
 from datetime import datetime
+from typing import List, Optional
 
 
 @dataclass

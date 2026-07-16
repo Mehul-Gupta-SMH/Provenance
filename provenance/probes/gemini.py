@@ -1,9 +1,10 @@
 """
 Gemini probe — stubbed for v1. Drop-in implementation in v2.
 """
-from provenance.probes.base import BaseProbe, ProbeContext, ProbeResult, ExtractedEntity
-from typing import Optional, List
 from datetime import datetime
+from typing import List, Optional
+
+from provenance.probes.base import BaseProbe, ExtractedEntity, ProbeContext, ProbeResult
 
 
 class GeminiProbe(BaseProbe):

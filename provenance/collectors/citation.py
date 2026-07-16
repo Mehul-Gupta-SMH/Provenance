@@ -14,7 +14,6 @@ from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
 
 from provenance.collectors.base import BaseCollector, CitationResult
-from provenance.config import Settings
 
 # Same URL pattern used by probes/base.py's default _extract_urls, so citation extraction
 # and probe-level URL capture stay consistent.

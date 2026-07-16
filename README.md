@@ -55,6 +55,12 @@ Provenance probes LLMs across query variants, extracts structured fingerprints f
 
 ---
 
+## Architecture
+
+Provenance is API-first: all business logic lives in the FastAPI service under `/v1/`, and route handlers contain no logic — they delegate to `services/` and `core/`. LLM probes (`probes/`) and signal collectors (`collectors/`) are registered implementations of abstract base classes (`core/registry.py`), so adding a provider is a drop-in, not a refactor. The schema is flat with late derivation: raw probe data (`QueryProbe`, `LLMSignal`, `DemandSignal`, `Citation`) is never aggregated at write time — segmentation, persona-based analysis, and cross-dimensional queries are all read-time operations, computed by `core/divergence.py` and `core/analysis.py` and cached only where explicitly noted (`DivergenceScore`). Every data point anchors to one of three join keys in a strict hierarchy: `Experiment` (cross-run grouping) → `Run` (one pipeline execution for one entity) → `QueryProbe` (one atomic LLM call, identified by `entry_id`). Per-probe signal tables reference `entry_id`, per-run tables reference `run_id`, and per-entity tables (future) reference `entity_id`. All schema changes go through Alembic — no hand-edited tables — and the SQLite-backed v1 schema is designed to swap to Postgres with zero migration changes.
+
+---
+
 ## Project Structure
 
 ```
@@ -93,7 +99,8 @@ pip install -r requirements.txt
 
 # 2. Configure environment
 cp .env.example .env
-# Fill in ANTHROPIC_API_KEY and other values
+# Fill in ANTHROPIC_API_KEY and other values (see .env.example for the full list:
+# ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, DATABASE_URL, APP_ENV, LOG_LEVEL)
 
 # 3. Run migrations
 alembic upgrade head
@@ -102,7 +109,64 @@ alembic upgrade head
 uvicorn main:app --reload
 ```
 
-API available at `http://localhost:8000/v1/`
+API available at `http://localhost:8000/v1/`. Interactive docs (Swagger UI) at `http://localhost:8000/docs`.
+
+### Running Tests
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -q
+```
+
+The test suite runs entirely offline against an in-memory SQLite database — no API keys or network access required.
+
+---
+
+## API Reference
+
+All routes are versioned under `/v1/`. Error responses use a structured body: `{"detail": {"error": "<CODE>", "detail": "<message>"}}`, with a matching HTTP status (404 for not-found, 422 for validation errors).
+
+### Meta
+
+| Method | Path | Description |
+|--------|------|--------------|
+| `GET` | `/health` | Liveness check. Returns `{"status": "ok", "version": "1.0.0"}`. |
+
+### Entities (`/v1/entities`)
+
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| `POST` | `/v1/entities` | `EntityCreate`: `name`, `category`, `url?`, `competitors[]`, `query_seeds[]` | `201` `EntityRead` |
+| `GET` | `/v1/entities` | Query: `skip` (≥0, default 0), `limit` (1-1000, default 100) | `200` `List[EntityRead]` |
+| `GET` | `/v1/entities/{entity_id}` | — | `200` `EntityRead`, or `404 ENTITY_NOT_FOUND` |
+| `PATCH` | `/v1/entities/{entity_id}` | `EntityUpdate`: any subset of `name`, `category`, `url`, `competitors`, `query_seeds` | `200` `EntityRead`, or `404 ENTITY_NOT_FOUND` |
+| `GET` | `/v1/entities/{entity_id}/fingerprint` | Query: `run_id?` (defaults to latest completed run) | `200` `EntityFingerprint`, or `404 ENTITY_NOT_FOUND` / `404 RUN_NOT_COMPLETED` |
+| `DELETE` | `/v1/entities/{entity_id}` | — | `200` `{"deleted": true}`, or `404 ENTITY_NOT_FOUND` |
+
+### Experiments (`/v1/experiments`)
+
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| `POST` | `/v1/experiments` | `ExperimentCreate`: `name`, `description?`, `config_json?` | `201` `ExperimentRead` |
+| `GET` | `/v1/experiments` | Query: `skip`, `limit` | `200` `List[ExperimentRead]` |
+| `GET` | `/v1/experiments/{experiment_id}` | — | `200` `ExperimentRead`, or `404 EXPERIMENT_NOT_FOUND` |
+
+### Runs (`/v1/runs`)
+
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| `POST` | `/v1/runs` | `RunCreate`: `entity_id`, `mode?` (`isolation` \| `aggregate`), `experiment_id?` | `201` `RunRead` (`status=pending`); schedules pipeline execution as a background task. `404 ENTITY_NOT_FOUND` / `404 EXPERIMENT_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}` | — | `200` `RunRead`, or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs` | Query: `entity_id?`, `skip`, `limit` | `200` `List[RunRead]` |
+| `POST` | `/v1/runs/{run_id}/divergence` | — | `200` `DivergenceScore` (recomputes and upserts), or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/divergence` | — | `200` `DivergenceScore`, or `404 DIVERGENCE_NOT_FOUND` |
+
+### Analysis (`/v1/analysis`)
+
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| `POST` | `/v1/analysis/competitor-delta` | `entity_id`, `competitor_entity_id`, `entity_run_id?`, `competitor_run_id?` | `200` `CompetitorDeltaResult` (per-field deltas + advantage/gap summaries), or `404 ENTITY_NOT_FOUND` / `404 RUN_NOT_COMPLETED` |
+| `POST` | `/v1/analysis/gap` | Same request shape as competitor-delta | `200` `List[GapItem]`, sorted by `priority_score` descending, or same `404`s |
 
 ---
 
