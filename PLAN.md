@@ -1,12 +1,78 @@
-I have read all the existing project artifacts. Now I will produce the comprehensive implementation plan.
+# Provenance — Comprehensive Implementation Plan
+
+**Version:** 1.1  
+**Date:** 2026-03-15 (v1.0) / 2026-07-16 (v1.1 reconciliation)  
+**Status:** Planning artifact — source of truth for v1 implementation
 
 ---
 
-# Provenance â€” Comprehensive Implementation Plan
+## Plan Status and Reconciliation (v1.1, 2026-07-16)
 
-**Version:** 1.0  
-**Date:** 2026-03-15  
-**Status:** Planning artifact â€” source of truth for v1 implementation
+This plan was written before implementation began. Phases 0 has since been built and merged,
+along with an extensibility layer that was not in the original plan. This revision reconciles
+the plan with the as-built code so that Phases 1-8 are planned against reality, not against
+the original draft.
+
+### Where we are
+
+| Phase | Status | Evidence |
+|-------|--------|----------|
+| Phase 0 — Foundation | **Complete** | `config.py`, `main.py` (`/health`), all models, registry, probe/collector bases + stubs, Alembic migration `0a1e3fafd37f` |
+| Extensibility layer (unplanned addition) | **Complete** | `Experiment` model, `DataPoint` EAV store, `Run.experiment_id`, `entry_id` join-key convention |
+| Schema normalization (unplanned addition) | **Complete** | Commit `b7eea1e`: dropped `LLMSignal.entity_id` and `DemandSignal.entity_id`, added composite indexes |
+| Phase 1 — Entity CRUD | **Next up** | `api/v1/routes/` and `services/` are empty |
+| Phases 2-8 | Not started | — |
+
+### What changed relative to the v1.0 plan (deltas)
+
+1. **`entry_id` replaces `probe_id`.** All per-probe signal tables (`LLMSignal`, `Citation`,
+   `DataPoint`) reference `query_probe.id` through a column named `entry_id`. This is the
+   stable join contract (see CLAUDE.md). Code samples in sections 4, 9, 10, and 11 have been
+   updated accordingly.
+2. **`LLMSignal` and `DemandSignal` no longer carry `entity_id`.** The entity is reachable
+   via joins (`entry_id → query_probe.run_id → run.entity_id`, and `run_id → run.entity_id`).
+   Consequence for pipeline semantics: an `LLMSignal` row describes *the run's own entity only*.
+   Competitor mentions are captured in `co_mentioned_entities_json`, not as separate signal
+   rows. Competitor comparison (Phase 7) works by comparing two entities' *own runs*, so no
+   information is lost. If per-competitor structured signals are ever needed, that is a new
+   signal table keyed by `entry_id` (per CLAUDE.md rules), not a column restoration.
+3. **Two new tables exist beyond the original plan:** `experiment` (grouping layer above Run)
+   and `data_point` (EAV store for future signal families — no migration needed for new
+   collectors). Documented in section 4.
+4. **Composite indexes** exist on `query_probe (run_id, query_variant)`,
+   `llm_signal (entry_id, mention_type)`, and `data_point (signal_family, signal_key)`.
+5. **Initial migration is real:** `migrations/versions/0a1e3fafd37f_initial_schema.py`
+   creates all eight tables (original seven plus `experiment` and `data_point`, minus the
+   dropped columns).
+
+### Forward plan (unchanged in structure, re-sequenced against reality)
+
+Build order for the remaining work, matching the dependency graph in section 2:
+
+1. **Phase 1 — Entity CRUD** (`routes/entities.py`, `services/entity_service.py`). No open
+   questions; schema is final. Include Experiment CRUD here as a sibling route
+   (`routes/experiments.py`) since the model already exists and Run creation in Phase 2 will
+   want to reference it.
+2. **Phase 2 — Run lifecycle** (create/get/list; status enum; optional `experiment_id`).
+3. **Phase 3 — Probe implementation** (Anthropic functional; OpenAI/Gemini stubs already
+   scaffolded — finish the canned-response contract).
+4. **Phase 4 — Collectors** (pytrends demand collector; citation extractor).
+5. **Phase 5 — Pipeline** (background-task orchestration; writes QueryProbe/LLMSignal/
+   DemandSignal/Citation rows using the reconciled semantics from delta #2).
+6. **Phase 6 — Divergence engine** (read-time computation, cached in `divergence_score`).
+7. **Phase 7 — Analysis** (fingerprint, competitor delta, gap analysis).
+8. **Phase 8 — Hardening** (tests, retries/backoff, structured logging, README API reference).
+
+Each phase remains independently mergeable with the boundary checks defined in section 1.
+
+### Open decisions (to resolve before or during the named phase)
+
+| Decision | Needed by | Recommendation |
+|----------|-----------|----------------|
+| Query-variant set for v1 probes (`direct/comparative/expert/contrarian` per LLD) | Phase 3 | Keep the four variants; make the list config-driven so experiments can override |
+| Claude model + extraction strategy (single call vs. separate extraction pass) | Phase 3 | Separate extraction pass (see section 7); model name via config, never hardcoded |
+| pytrends failure policy (fail run vs. degrade to null demand signals) | Phase 4 | Degrade: record run as `completed` with missing DemandSignal, log warning (see Risk 1) |
+| Divergence auto-compute at pipeline end vs. on-demand endpoint | Phase 6 | Auto-compute at pipeline completion *and* expose recompute endpoint |
 
 ---
 
@@ -32,7 +98,7 @@ I have read all the existing project artifacts. Now I will produce the comprehen
 
 ## 1. Phase Overview
 
-### Phase 0 â€” Foundation (Prerequisite for everything)
+### Phase 0 — Foundation (Prerequisite for everything)
 
 Deliverables at boundary:
 - `config.py` with all settings loaded from environment
@@ -47,7 +113,7 @@ Boundary check: `alembic upgrade head` runs clean. SQLite file is created. All t
 
 ---
 
-### Phase 1 â€” Entity CRUD
+### Phase 1 — Entity CRUD
 
 Deliverables at boundary:
 - `models/entity.py` complete with all columns
@@ -59,7 +125,7 @@ Boundary check: Full round-trip via `curl` or a test client. Create entity, retr
 
 ---
 
-### Phase 2 â€” Run Lifecycle (no execution yet)
+### Phase 2 — Run Lifecycle (no execution yet)
 
 Deliverables at boundary:
 - `models/run.py` complete
@@ -71,69 +137,69 @@ Boundary check: POST to `/v1/runs` returns a run record with `status=pending`. G
 
 ---
 
-### Phase 3 â€” Probe Infrastructure
+### Phase 3 — Probe Infrastructure
 
 Deliverables at boundary:
-- `probes/base.py` â€” `BaseProbe` ABC with full interface
-- `probes/anthropic.py` â€” `AnthropicProbe` functional implementation
-- `probes/openai.py` â€” `OpenAIProbe` stub that returns a canned response conforming to the interface
-- `probes/gemini.py` â€” `GeminiProbe` stub same as above
-- `core/registry.py` â€” `ProbeRegistry` with register/get/list
+- `probes/base.py` — `BaseProbe` ABC with full interface
+- `probes/anthropic.py` — `AnthropicProbe` functional implementation
+- `probes/openai.py` — `OpenAIProbe` stub that returns a canned response conforming to the interface
+- `probes/gemini.py` — `GeminiProbe` stub same as above
+- `core/registry.py` — `ProbeRegistry` with register/get/list
 - All three probes registered on application startup
 
 Boundary check: In isolation (no API), instantiate `AnthropicProbe`, call `probe()` with a test query, receive a `ProbeResult` dataclass back.
 
 ---
 
-### Phase 4 â€” Collector Infrastructure
+### Phase 4 — Collector Infrastructure
 
 Deliverables at boundary:
-- `collectors/base.py` â€” `BaseCollector` ABC
-- `collectors/demand.py` â€” `DemandCollector` functional (pytrends)
-- `collectors/citation.py` â€” `CitationExtractor` functional (regex/URL parsing from LLM response text)
+- `collectors/base.py` — `BaseCollector` ABC
+- `collectors/demand.py` — `DemandCollector` functional (pytrends)
+- `collectors/citation.py` — `CitationExtractor` functional (regex/URL parsing from LLM response text)
 - `CollectorRegistry` registered in `core/registry.py`
 
 Boundary check: In isolation, instantiate `DemandCollector`, call `collect("neo4j", "graph database")`, receive a `DemandResult` back. Instantiate `CitationExtractor`, pass a raw LLM response string with URLs, receive `List[CitationResult]`.
 
 ---
 
-### Phase 5 â€” Pipeline Execution
+### Phase 5 — Pipeline Execution
 
 Deliverables at boundary:
-- `core/pipeline.py` â€” `RunPipeline` orchestrator
-- FastAPI background task wired to `POST /v1/runs` â€” fires pipeline after creating run record
+- `core/pipeline.py` — `RunPipeline` orchestrator
+- FastAPI background task wired to `POST /v1/runs` — fires pipeline after creating run record
 - `models/query_probe.py`, `models/llm_signal.py`, `models/demand_signal.py`, `models/citation.py` all written during pipeline execution
-- Run status transitions: `pending â†’ running â†’ completed | failed`
+- Run status transitions: `pending → running → completed | failed`
 
 Boundary check: POST a run for an entity with a valid Anthropic key. Wait (poll GET run). Status reaches `completed`. Database contains QueryProbe, LLMSignal, DemandSignal, and Citation rows for the run.
 
 ---
 
-### Phase 6 â€” Divergence Engine
+### Phase 6 — Divergence Engine
 
 Deliverables at boundary:
-- `core/divergence.py` â€” `DivergenceEngine` with computation logic
-- `models/divergence_score.py` â€” DivergenceScore table
-- `POST /v1/runs/{run_id}/divergence` â€” triggers computation (or auto-triggered at pipeline completion)
-- `GET /v1/runs/{run_id}/divergence` â€” returns computed scores
+- `core/divergence.py` — `DivergenceEngine` with computation logic
+- `models/divergence_score.py` — DivergenceScore table
+- `POST /v1/runs/{run_id}/divergence` — triggers computation (or auto-triggered at pipeline completion)
+- `GET /v1/runs/{run_id}/divergence` — returns computed scores
 
 Boundary check: After a completed run, call divergence endpoint. Receive DivergenceScore rows with `demand_llm_alignment_score`, `divergence_direction`, `cross_query_stability`.
 
 ---
 
-### Phase 7 â€” Analysis Layer (Competitor Delta + Gap Analysis)
+### Phase 7 — Analysis Layer (Competitor Delta + Gap Analysis)
 
 Deliverables at boundary:
-- `core/analysis.py` â€” `FingerprintBuilder`, `CompetitorDelta`, `GapAnalyzer`
-- `GET /v1/entities/{entity_id}/fingerprint` â€” returns assembled fingerprint for latest or specified run
-- `POST /v1/analysis/competitor-delta` â€” accepts two entity_ids, returns diff
-- `POST /v1/analysis/gap` â€” accepts entity_id + competitor_entity_id (or ideal target), returns prioritized gap list
+- `core/analysis.py` — `FingerprintBuilder`, `CompetitorDelta`, `GapAnalyzer`
+- `GET /v1/entities/{entity_id}/fingerprint` — returns assembled fingerprint for latest or specified run
+- `POST /v1/analysis/competitor-delta` — accepts two entity_ids, returns diff
+- `POST /v1/analysis/gap` — accepts entity_id + competitor_entity_id (or ideal target), returns prioritized gap list
 
 Boundary check: With two entities that each have completed runs, call `/v1/analysis/competitor-delta`. Receive a structured diff of signal vectors. Call `/v1/analysis/gap`. Receive a list of gaps ordered by estimated impact score.
 
 ---
 
-### Phase 8 â€” Hardening
+### Phase 8 — Hardening
 
 Deliverables at boundary:
 - Full test suite passing (unit + integration)
@@ -388,15 +454,21 @@ class RunRead(SQLModel):
 
 ### `models/query_probe.py`
 
-This is the widest table in the system. All ProbeContext fields are flat columns â€” no nesting, no JSON blobs. This is the core architectural decision from the thesis ("flat schema, late derivation").
+This is the widest table in the system. All ProbeContext fields are flat columns — no nesting, no JSON blobs. This is the core architectural decision from the thesis ("flat schema, late derivation").
 
 ```python
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Index
 from typing import Optional
 from datetime import datetime
 
 class QueryProbe(SQLModel, table=True):
     __tablename__ = "query_probe"
+    # Composite index for the primary read pattern: all probes for a run, filtered by variant
+    __table_args__ = (
+        Index("ix_query_probe_run_variant", "run_id", "query_variant"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
 
     # Run linkage
@@ -435,16 +507,26 @@ class QueryProbe(SQLModel, table=True):
 
 ### `models/llm_signal.py`
 
+One row per probe, describing how the LLM treated *the run's own entity* in that probe.
+The entity is never stored here — it is reachable via `entry_id → query_probe.run_id →
+run.entity_id`. Competitor mentions live in `co_mentioned_entities_json`.
+
 ```python
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Index
 from typing import Optional
 
 class LLMSignal(SQLModel, table=True):
     __tablename__ = "llm_signal"
+    # Composite index for the primary read pattern: all signals for a probe, by mention type
+    __table_args__ = (
+        Index("ix_llm_signal_entry_mention", "entry_id", "mention_type"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    probe_id: int = Field(foreign_key="query_probe.id", index=True)
-    entity_id: int = Field(foreign_key="entity.id", index=True)
+    # entry_id is the universal join key — references query_probe.id (the atomic observation)
+    entry_id: int = Field(foreign_key="query_probe.id", index=True)
 
     # Recommendation signals
     recommendation_rank: Optional[int] = None   # 1, 2, 3... or None if absent
@@ -452,8 +534,8 @@ class LLMSignal(SQLModel, table=True):
     phrasing_sentiment: Optional[str] = None    # "positive" | "neutral" | "qualified"
     context_of_mention: Optional[str] = None    # free text: use-case or constraint satisfied
 
-    # Co-mention signals
-    co_mentioned_entities_json: str = Field(default="[]")  # JSON list of entity names
+    # Co-mention signals — JSON string (list of entity name strings); v1/SQLite intentional
+    co_mentioned_entities_json: str = Field(default="[]")
 
     # Stability signals (derived, stored here for query convenience)
     query_sensitivity: Optional[float] = None  # 0-1: how much rank varies across variants
@@ -472,7 +554,7 @@ class DemandSignal(SQLModel, table=True):
     __tablename__ = "demand_signal"
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    entity_id: int = Field(foreign_key="entity.id", index=True)
+    # entity is reachable via: run_id → run.entity_id
     run_id: int = Field(foreign_key="run.id", index=True)
     collected_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -496,7 +578,8 @@ class Citation(SQLModel, table=True):
     __tablename__ = "citation"
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    probe_id: int = Field(foreign_key="query_probe.id", index=True)
+    # entry_id is the universal join key — references query_probe.id
+    entry_id: int = Field(foreign_key="query_probe.id", index=True)
 
     cited_url: str
     domain: str                                 # extracted from cited_url
@@ -533,6 +616,62 @@ class DivergenceScore(SQLModel, table=True):
     average_recommendation_rank: Optional[float] = None
     mention_type_distribution_json: str = Field(default="{}")  # JSON: {type: count}
     probes_included: int = 0                   # how many probes factored in
+```
+
+---
+
+### `models/experiment.py` (added post-v1.0 — extensibility layer)
+
+Grouping layer above Run. Enables cross-run comparison, drift tracking, and A/B analysis.
+`Run.experiment_id` is a nullable FK to this table.
+
+```python
+class Experiment(SQLModel, table=True):
+    __tablename__ = "experiment"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    description: Optional[str] = None
+    # Free-form config overrides for this experiment (probe settings, persona, etc.)
+    config_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+```
+
+---
+
+### `models/data_point.py` (added post-v1.0 — extensibility layer)
+
+The ever-expanding EAV signal store. Structured tables (`LLMSignal`, `DemandSignal`,
+`Citation`) exist for core signals that need typed columns; `DataPoint` absorbs everything
+else — new signal collectors write here with **no schema migration**.
+
+```python
+class DataPoint(SQLModel, table=True):
+    __tablename__ = "data_point"
+    # Composite index for EAV lookups: "all reddit_mention_count values across runs"
+    __table_args__ = (
+        Index("ix_data_point_family_key", "signal_family", "signal_key"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Join keys — at least one must be set
+    entry_id: Optional[int] = Field(default=None, foreign_key="query_probe.id", index=True)
+    run_id: Optional[int] = Field(default=None, foreign_key="run.id", index=True)
+    entity_id: Optional[int] = Field(default=None, foreign_key="entity.id", index=True)
+    experiment_id: Optional[int] = Field(default=None, foreign_key="experiment.id", index=True)
+
+    # Signal identity
+    signal_family: str = Field(index=True)   # "social" | "authority" | "semantic" | ...
+    signal_key: str = Field(index=True)      # "reddit_mention_count" | "domain_authority" | ...
+
+    # Signal value — numeric or text, never both null
+    signal_value: Optional[float] = None
+    signal_text: Optional[str] = None
+
+    # Provenance of the data point itself
+    collected_at: datetime = Field(default_factory=datetime.utcnow)
+    collector_name: str = ""
+    collector_version: str = "1.0"
 ```
 
 ---
@@ -739,7 +878,7 @@ class BaseCollector(ABC):
 
 ### `probes/anthropic.py`
 
-The Anthropic probe is the only functional probe in v1. Its entity extraction uses a structured second LLM call (extraction pass) rather than regex â€” this produces cleaner signal and is more robust to varied response formats.
+The Anthropic probe is the only functional probe in v1. Its entity extraction uses a structured second LLM call (extraction pass) rather than regex — this produces cleaner signal and is more robust to varied response formats.
 
 ```python
 import anthropic
@@ -906,7 +1045,7 @@ Extract the recommendation signal for each entity. Return JSON only.
             ]
 ```
 
-Design note: The extraction uses a second LLM call with `temperature=0.0`. This is deliberate â€” extraction is a deterministic parsing task, not a creative one. The cost is one additional API call per probe. This is acceptable in v1. In v2, this can be replaced with structured output (tool use / JSON mode).
+Design note: The extraction uses a second LLM call with `temperature=0.0`. This is deliberate — extraction is a deterministic parsing task, not a creative one. The cost is one additional API call per probe. This is acceptable in v1. In v2, this can be replaced with structured output (tool use / JSON mode).
 
 ---
 
@@ -1110,7 +1249,7 @@ Design note: In v1, citation extraction is purely URL-based (no HTTP fetching). 
 
 ### `core/pipeline.py`
 
-The pipeline is the central orchestrator. It is called by the FastAPI background task. It is a pure async function â€” no FastAPI dependency injection inside it.
+The pipeline is the central orchestrator. It is called by the FastAPI background task. It is a pure async function — no FastAPI dependency injection inside it.
 
 ```python
 import asyncio
@@ -1144,7 +1283,7 @@ class RunPipeline:
     1. Mark run as running
     2. Load entity + competitors
     3. Collect demand signals for entity + all competitors
-    4. Execute LLM probes (4 query variants Ã— configured providers)
+    4. Execute LLM probes (4 query variants × configured providers)
     5. Write QueryProbe rows
     6. Extract + write LLMSignal rows
     7. Extract + write Citation rows
@@ -1262,29 +1401,31 @@ class RunPipeline:
             self.session.add(qp)
             self.session.flush()  # get qp.id
 
-            # Write LLMSignal per entity
-            all_entity_names = [entity.name] + competitors
-            for extracted in result.extracted_entities:
-                target_entity_id = self._resolve_entity_id(extracted.name, entity, all_entity_names)
-                if target_entity_id is None:
-                    continue
-                signal = LLMSignal(
-                    probe_id=qp.id,
-                    entity_id=target_entity_id,
-                    recommendation_rank=extracted.recommendation_rank,
-                    mention_type=extracted.mention_type,
-                    phrasing_sentiment=extracted.phrasing_sentiment,
-                    context_of_mention=extracted.context_of_mention,
-                    co_mentioned_entities_json=json.dumps(extracted.co_mentioned_entities),
-                )
-                self.session.add(signal)
+            # Write LLMSignal — one row per probe, describing the run's own entity.
+            # Competitor mentions are folded into co_mentioned_entities_json; they are
+            # NOT separate signal rows (LLMSignal carries no entity_id — the entity is
+            # reachable via entry_id → query_probe.run_id → run.entity_id).
+            extracted = self._find_own_entity(result.extracted_entities, entity.name)
+            co_mentioned = [
+                e.name for e in result.extracted_entities
+                if e.name.lower() != entity.name.lower()
+            ]
+            signal = LLMSignal(
+                entry_id=qp.id,
+                recommendation_rank=extracted.recommendation_rank if extracted else None,
+                mention_type=extracted.mention_type if extracted else "absent",
+                phrasing_sentiment=extracted.phrasing_sentiment if extracted else None,
+                context_of_mention=extracted.context_of_mention if extracted else None,
+                co_mentioned_entities_json=json.dumps(co_mentioned),
+            )
+            self.session.add(signal)
 
             # Write Citations
             citation_extractor = CitationExtractor(self.settings)
             citations = citation_extractor.collect(result.raw_response, entity.name)
             for c in citations:
                 cit = Citation(
-                    probe_id=qp.id,
+                    entry_id=qp.id,
                     cited_url=c.cited_url,
                     domain=c.domain,
                     content_type=c.content_type,
@@ -1300,19 +1441,16 @@ class RunPipeline:
             temperature=self.settings.anthropic_default_temperature,
         )
 
-    def _resolve_entity_id(self, name: str, primary_entity, all_names: list) -> Optional[int]:
+    def _find_own_entity(self, extracted_entities: list, entity_name: str):
         """
-        For LLMSignal, we need the entity_id. For the primary entity, we have it.
-        For competitors, they may not exist as Entity rows. In v1, only the primary entity_id is stored.
-        Competitors are captured in co_mentioned_entities_json on the primary signal.
+        Locate the run's own entity among the extraction results (case-insensitive
+        name match). Returns None when the LLM did not mention the entity at all,
+        in which case the signal row records mention_type="absent".
         """
-        if name.lower() == primary_entity.name.lower():
-            return primary_entity.id
-        # Competitors not tracked as separate entities unless they have their own Entity rows
-        result = self.session.exec(
-            select(Entity).where(Entity.name == name)
-        ).first()
-        return result.id if result else None
+        for e in extracted_entities:
+            if e.name.lower() == entity_name.lower():
+                return e
+        return None
 
     def _fail_run(self, run: Run, error: str) -> None:
         run.status = RunStatus.failed
@@ -1454,19 +1592,18 @@ class DivergenceEngine:
         probes = self.session.exec(
             select(QueryProbe).where(QueryProbe.run_id == run_id)
         ).all()
-        probe_ids = [p.id for p in probes]
+        entry_ids = [p.id for p in probes]
 
-        # Fetch LLM signals for this entity across all probes in run
+        # Fetch LLM signals across all probes in run. No entity filter needed:
+        # every signal in this run describes the run's own entity by construction.
         signals = self.session.exec(
             select(LLMSignal)
-            .where(LLMSignal.entity_id == entity_id)
-            .where(LLMSignal.probe_id.in_(probe_ids))
+            .where(LLMSignal.entry_id.in_(entry_ids))
         ).all()
 
-        # Fetch latest demand signal for this entity in this run
+        # Fetch latest demand signal for this run (entity implied by run.entity_id)
         demand = self.session.exec(
             select(DemandSignal)
-            .where(DemandSignal.entity_id == entity_id)
             .where(DemandSignal.run_id == run_id)
             .order_by(DemandSignal.collected_at.desc())
         ).first()
@@ -1560,7 +1697,7 @@ class DivergenceEngine:
 
 #### Fingerprint
 
-A Fingerprint is the assembled signal vector for one entity from one run. It is a Pydantic model (not a SQLModel table â€” it is a computed read-time object).
+A Fingerprint is the assembled signal vector for one entity from one run. It is a Pydantic model (not a SQLModel table — it is a computed read-time object).
 
 ```python
 from pydantic import BaseModel
@@ -1602,7 +1739,6 @@ class FingerprintBuilder:
         entity = self.session.get(Entity, entity_id)
         demand = self.session.exec(
             select(DemandSignal)
-            .where(DemandSignal.entity_id == entity_id)
             .where(DemandSignal.run_id == run_id)
         ).first()
         divergence = self.session.exec(
@@ -1613,11 +1749,11 @@ class FingerprintBuilder:
         probes = self.session.exec(
             select(QueryProbe).where(QueryProbe.run_id == run_id)
         ).all()
-        probe_ids = [p.id for p in probes]
+        entry_ids = [p.id for p in probes]
+        # No entity filter: signals in a run describe the run's entity by construction
         signals = self.session.exec(
             select(LLMSignal)
-            .where(LLMSignal.entity_id == entity_id)
-            .where(LLMSignal.probe_id.in_(probe_ids))
+            .where(LLMSignal.entry_id.in_(entry_ids))
         ).all()
 
         # Aggregate LLM signals
@@ -1699,7 +1835,7 @@ class CompetitorDeltaService:
             "cross_query_stability",
             "alignment_score",
         ]
-        # Note: recommendation_rank is inverted â€” lower is better
+        # Note: recommendation_rank is inverted — lower is better
         INVERTED_FIELDS = {"average_recommendation_rank"}
 
         deltas = []
@@ -1815,7 +1951,7 @@ class GapAnalyzer:
 
 ## 12. Low-Level Design: API Layer
 
-All routes are in `api/v1/routes/`. Route handlers contain no logic â€” they call service functions only. All request/response types are Pydantic models.
+All routes are in `api/v1/routes/`. Route handlers contain no logic — they call service functions only. All request/response types are Pydantic models.
 
 ### Route Summary
 
@@ -1825,22 +1961,22 @@ All routes are in `api/v1/routes/`. Route handlers contain no logic â€” the
 |--------|------|---------|----------|-------------|
 | POST | `/v1/entities` | `EntityCreate` | `EntityRead` | Create entity |
 | GET | `/v1/entities` | query: `skip`, `limit` | `List[EntityRead]` | List entities |
-| GET | `/v1/entities/{entity_id}` | â€” | `EntityRead` | Get entity |
+| GET | `/v1/entities/{entity_id}` | — | `EntityRead` | Get entity |
 | PATCH | `/v1/entities/{entity_id}` | `EntityUpdate` | `EntityRead` | Update entity |
-| DELETE | `/v1/entities/{entity_id}` | â€” | `{"deleted": true}` | Delete entity |
+| DELETE | `/v1/entities/{entity_id}` | — | `{"deleted": true}` | Delete entity |
 
 #### `api/v1/routes/runs.py`
 
 | Method | Path | Request | Response | Description |
 |--------|------|---------|----------|-------------|
 | POST | `/v1/runs` | `RunCreate` | `RunRead` | Create + start run |
-| GET | `/v1/runs/{run_id}` | â€” | `RunRead` | Get run status |
+| GET | `/v1/runs/{run_id}` | — | `RunRead` | Get run status |
 | GET | `/v1/entities/{entity_id}/runs` | query: `skip`, `limit` | `List[RunRead]` | List runs for entity |
-| GET | `/v1/runs/{run_id}/probes` | â€” | `List[QueryProbeRead]` | Get all probes for run |
-| GET | `/v1/runs/{run_id}/signals` | â€” | `List[LLMSignalRead]` | Get LLM signals for run |
-| GET | `/v1/runs/{run_id}/demand` | â€” | `List[DemandSignalRead]` | Get demand signals for run |
-| GET | `/v1/runs/{run_id}/citations` | â€” | `List[CitationRead]` | Get citations for run |
-| GET | `/v1/runs/{run_id}/divergence` | â€” | `List[DivergenceScoreRead]` | Get divergence scores for run |
+| GET | `/v1/runs/{run_id}/probes` | — | `List[QueryProbeRead]` | Get all probes for run |
+| GET | `/v1/runs/{run_id}/signals` | — | `List[LLMSignalRead]` | Get LLM signals for run |
+| GET | `/v1/runs/{run_id}/demand` | — | `List[DemandSignalRead]` | Get demand signals for run |
+| GET | `/v1/runs/{run_id}/citations` | — | `List[CitationRead]` | Get citations for run |
+| GET | `/v1/runs/{run_id}/divergence` | — | `List[DivergenceScoreRead]` | Get divergence scores for run |
 
 #### `api/v1/routes/analysis.py`
 
@@ -1889,7 +2025,7 @@ HTTP exceptions raised in the service layer are caught by a FastAPI exception ha
 alembic init migrations
 ```
 
-`alembic.ini` â€” set `sqlalchemy.url` to read from environment (not hardcoded):
+`alembic.ini` — set `sqlalchemy.url` to read from environment (not hardcoded):
 
 ```ini
 # In env.py, override the URL from settings
@@ -1897,25 +2033,28 @@ from provenance.config import get_settings
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 ```
 
-`migrations/env.py` â€” import all SQLModel models to populate metadata:
+`migrations/env.py` — import all SQLModel models to populate metadata:
 
 ```python
-from provenance.models import entity, run, query_probe, llm_signal, demand_signal, citation, divergence_score
+from provenance.models import (
+    entity, run, experiment, query_probe,
+    llm_signal, demand_signal, citation, divergence_score, data_point,
+)
 from sqlmodel import SQLModel
 target_metadata = SQLModel.metadata
 ```
 
 ### Migration Sequence
 
-| Migration | Name | Tables Created |
-|-----------|------|----------------|
-| 001 | `initial_schema` | entity, run, query_probe, llm_signal, demand_signal, citation, divergence_score |
+| Migration | Name | Tables Created | Status |
+|-----------|------|----------------|--------|
+| `0a1e3fafd37f` | `initial_schema` | entity, experiment, run, query_probe, llm_signal, demand_signal, citation, divergence_score, data_point | **Applied — exists in repo** |
 
 All tables are created in a single initial migration. Subsequent migrations track any schema additions.
 
 ### Key Alembic Rules
 
-1. Never use `SQLModel.metadata.create_all()` in production â€” that is only for dev/test.
+1. Never use `SQLModel.metadata.create_all()` in production — that is only for dev/test.
 2. Every PR that touches `models/` must include a corresponding Alembic migration.
 3. Migration files are committed to the repository.
 4. `alembic upgrade head` is the only way schema changes are applied.
@@ -1940,29 +2079,29 @@ All tables are created in a single initial migration. Subsequent migrations trac
 
 ```
 tests/
-â”œâ”€â”€ conftest.py                    # Shared fixtures: in-memory engine, session, client
-â”œâ”€â”€ test_models/
-â”‚   â”œâ”€â”€ test_entity.py
-â”‚   â””â”€â”€ test_run.py
-â”œâ”€â”€ test_probes/
-â”‚   â”œâ”€â”€ test_anthropic.py
-â”‚   â”œâ”€â”€ test_openai_stub.py
-â”‚   â””â”€â”€ test_gemini_stub.py
-â”œâ”€â”€ test_collectors/
-â”‚   â”œâ”€â”€ test_demand.py
-â”‚   â””â”€â”€ test_citation.py
-â”œâ”€â”€ test_core/
-â”‚   â”œâ”€â”€ test_registry.py
-â”‚   â”œâ”€â”€ test_pipeline.py
-â”‚   â””â”€â”€ test_divergence.py
-â”œâ”€â”€ test_analysis/
-â”‚   â”œâ”€â”€ test_fingerprint.py
-â”‚   â”œâ”€â”€ test_competitor_delta.py
-â”‚   â””â”€â”€ test_gap_analysis.py
-â””â”€â”€ test_api/
-    â”œâ”€â”€ test_entities.py
-    â”œâ”€â”€ test_runs.py
-    â””â”€â”€ test_analysis.py
+├── conftest.py                    # Shared fixtures: in-memory engine, session, client
+├── test_models/
+│   ├── test_entity.py
+│   └── test_run.py
+├── test_probes/
+│   ├── test_anthropic.py
+│   ├── test_openai_stub.py
+│   └── test_gemini_stub.py
+├── test_collectors/
+│   ├── test_demand.py
+│   └── test_citation.py
+├── test_core/
+│   ├── test_registry.py
+│   ├── test_pipeline.py
+│   └── test_divergence.py
+├── test_analysis/
+│   ├── test_fingerprint.py
+│   ├── test_competitor_delta.py
+│   └── test_gap_analysis.py
+└── test_api/
+    ├── test_entities.py
+    ├── test_runs.py
+    └── test_analysis.py
 ```
 
 ---
@@ -2004,48 +2143,48 @@ def client_fixture(session):
 
 #### Probes
 
-1. `AnthropicProbe.probe()` â€” mock `anthropic.Anthropic.messages.create`, verify `ProbeResult` fields populated correctly
-2. `AnthropicProbe._extract_entities()` â€” pass a canned response string, assert extracted entity has correct `mention_type` and `recommendation_rank`
-3. `AnthropicProbe.probe()` with API error â€” assert `ProbeResult.error` is set, no exception raised
-4. `OpenAIProbe.probe()` â€” assert returns stub `ProbeResult` with `error="stub"`
+1. `AnthropicProbe.probe()` — mock `anthropic.Anthropic.messages.create`, verify `ProbeResult` fields populated correctly
+2. `AnthropicProbe._extract_entities()` — pass a canned response string, assert extracted entity has correct `mention_type` and `recommendation_rank`
+3. `AnthropicProbe.probe()` with API error — assert `ProbeResult.error` is set, no exception raised
+4. `OpenAIProbe.probe()` — assert returns stub `ProbeResult` with `error="stub"`
 
 #### Collectors
 
-5. `DemandCollector.collect()` â€” mock `TrendReq`, verify `DemandResult` fields from fixture DataFrame
-6. `DemandCollector.collect()` on pytrends error â€” assert `DemandResult.error` set, no exception
-7. `CitationExtractor.collect()` â€” pass response string with known URLs, assert correct domains and content_type inference
-8. `CitationExtractor.collect()` with no URLs â€” assert returns empty list
+5. `DemandCollector.collect()` — mock `TrendReq`, verify `DemandResult` fields from fixture DataFrame
+6. `DemandCollector.collect()` on pytrends error — assert `DemandResult.error` set, no exception
+7. `CitationExtractor.collect()` — pass response string with known URLs, assert correct domains and content_type inference
+8. `CitationExtractor.collect()` with no URLs — assert returns empty list
 
 #### Pipeline
 
-9. Full pipeline with mocked probe and collector â€” assert Run transitions to `completed`, QueryProbe rows exist, LLMSignal rows exist, DemandSignal rows exist
-10. Pipeline with probe error â€” assert Run transitions to `failed`, `error_message` populated
-11. Pipeline isolation mode â€” assert only `anthropic` probe called
-12. Pipeline aggregate mode â€” assert all registered probes called
+9. Full pipeline with mocked probe and collector — assert Run transitions to `completed`, QueryProbe rows exist, LLMSignal rows exist, DemandSignal rows exist
+10. Pipeline with probe error — assert Run transitions to `failed`, `error_message` populated
+11. Pipeline isolation mode — assert only `anthropic` probe called
+12. Pipeline aggregate mode — assert all registered probes called
 
 #### Divergence
 
-13. `DivergenceEngine.compute_and_store()` with perfect alignment â€” assert `direction="aligned"`, `alignment_score >= 0.7`
-14. With entity absent from all probes â€” assert `direction="demand_ahead"`, `alignment_score` low, `cross_query_stability` low
-15. With consistent rank 1 across all variants â€” assert `cross_query_stability == 1.0`
-16. With rank oscillating 1 and 5 â€” assert `cross_query_stability == 0.2`
+13. `DivergenceEngine.compute_and_store()` with perfect alignment — assert `direction="aligned"`, `alignment_score >= 0.7`
+14. With entity absent from all probes — assert `direction="demand_ahead"`, `alignment_score` low, `cross_query_stability` low
+15. With consistent rank 1 across all variants — assert `cross_query_stability == 1.0`
+16. With rank oscillating 1 and 5 — assert `cross_query_stability == 0.2`
 
 #### Analysis
 
-17. `FingerprintBuilder.build()` â€” fixture run with known signals, assert all fingerprint fields computed correctly
-18. `CompetitorDeltaService.compute()` â€” two fixture fingerprints where competitor leads on `mention_rate`, assert delta direction correct
-19. `GapAnalyzer.analyze()` â€” fixture delta result, assert gaps sorted by priority_score descending
-20. `GapAnalyzer.analyze()` with no gaps (entity leads on all fields) â€” assert returns empty list
+17. `FingerprintBuilder.build()` — fixture run with known signals, assert all fingerprint fields computed correctly
+18. `CompetitorDeltaService.compute()` — two fixture fingerprints where competitor leads on `mention_rate`, assert delta direction correct
+19. `GapAnalyzer.analyze()` — fixture delta result, assert gaps sorted by priority_score descending
+20. `GapAnalyzer.analyze()` with no gaps (entity leads on all fields) — assert returns empty list
 
 #### API
 
-21. `POST /v1/entities` â€” create entity, assert 201 and `EntityRead` response
-22. `GET /v1/entities/{id}` â€” 404 for missing entity
-23. `POST /v1/runs` â€” mock background task, assert 201 and `RunRead` with `status=pending`
-24. `GET /v1/runs/{id}` â€” assert status field reflects db state
-25. `GET /v1/runs/{id}/divergence` â€” with completed run fixture, returns `DivergenceScoreRead`
-26. `POST /v1/analysis/competitor-delta` â€” fixture entities with runs, returns delta
-27. `POST /v1/analysis/gap` â€” fixture entities with runs, returns prioritized gaps
+21. `POST /v1/entities` — create entity, assert 201 and `EntityRead` response
+22. `GET /v1/entities/{id}` — 404 for missing entity
+23. `POST /v1/runs` — mock background task, assert 201 and `RunRead` with `status=pending`
+24. `GET /v1/runs/{id}` — assert status field reflects db state
+25. `GET /v1/runs/{id}/divergence` — with completed run fixture, returns `DivergenceScoreRead`
+26. `POST /v1/analysis/competitor-delta` — fixture entities with runs, returns delta
+27. `POST /v1/analysis/gap` — fixture entities with runs, returns prioritized gaps
 
 ---
 
@@ -2057,15 +2196,15 @@ pytrends hits an unofficial Google API. It has no SLA, changes without notice, a
 
 Mitigations:
 - Always sleep between pytrends calls (`pytrends_request_delay_seconds`, default 1.0)
-- Wrap every `pytrends` call in `try/except` and return `DemandResult` with `error` field set â€” never let a demand collection failure crash a run
-- Mock pytrends in all tests â€” never hit the real API in CI
-- Design `DemandSignal` so all fields are `Optional` â€” a run with no demand data is valid and can still produce partial divergence scores
+- Wrap every `pytrends` call in `try/except` and return `DemandResult` with `error` field set — never let a demand collection failure crash a run
+- Mock pytrends in all tests — never hit the real API in CI
+- Design `DemandSignal` so all fields are `Optional` — a run with no demand data is valid and can still produce partial divergence scores
 
 ---
 
 ### Risk 2: Anthropic Extraction Pass Cost and Latency
 
-Every probe generates a second Anthropic call for structured extraction. With 4 query variants per run, that is 8 total Anthropic API calls per run (isolation mode). In aggregate mode (3 providers): 4 probe calls + 4 extraction calls = 8, but only the Anthropic ones do real extraction â€” stubs return empty lists.
+Every probe generates a second Anthropic call for structured extraction. With 4 query variants per run, that is 8 total Anthropic API calls per run (isolation mode). In aggregate mode (3 providers): 4 probe calls + 4 extraction calls = 8, but only the Anthropic ones do real extraction — stubs return empty lists.
 
 Mitigations:
 - Set `temperature=0.0` on extraction to reduce token variance
@@ -2097,7 +2236,7 @@ Do not add triggers or computed columns to this table. All computation must rema
 
 When the probe extracts signal for a competitor entity (e.g. "Neo4j"), that competitor may not have an `Entity` row in the database. In v1, `_resolve_entity_id()` returns `None` for unknown competitors, and no `LLMSignal` row is written for them. Co-mention data is still captured in `co_mentioned_entities_json` on the primary entity's signal.
 
-This is a deliberate scope constraint. It means competitor analysis requires the competitor to be registered as an `Entity` and have its own run. This is by design â€” the value of Provenance is in running the full pipeline for each entity, not in inferring competitor signals from a single probe.
+This is a deliberate scope constraint. It means competitor analysis requires the competitor to be registered as an `Entity` and have its own run. This is by design — the value of Provenance is in running the full pipeline for each entity, not in inferring competitor signals from a single probe.
 
 ---
 
@@ -2105,7 +2244,7 @@ This is a deliberate scope constraint. It means competitor analysis requires the
 
 SQLite with `check_same_thread=False` allows multiple threads to access the same database, but SQLite's write lock is serialized. If two runs execute simultaneously, one will wait on the other's write lock.
 
-This is acceptable in v1 (single-user tool). When moving to Postgres in v2, this resolves automatically. Do not add concurrency workarounds in v1 â€” they are not needed and would complicate the Postgres migration.
+This is acceptable in v1 (single-user tool). When moving to Postgres in v2, this resolves automatically. Do not add concurrency workarounds in v1 — they are not needed and would complicate the Postgres migration.
 
 ---
 
