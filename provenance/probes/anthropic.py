@@ -31,7 +31,7 @@ from typing import Any, List, Optional
 import anthropic
 from anthropic import AsyncAnthropic
 
-from provenance.probes.base import BaseProbe, ProbeContext, ProbeResult, ExtractedEntity
+from provenance.probes.base import BaseProbe, ExtractedEntity, ProbeContext, ProbeResult
 
 logger = logging.getLogger(__name__)
 
