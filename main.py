@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 import provenance.models  # noqa: F401 — registers all SQLModel metadata
+from provenance.api.v1 import router as v1_router
 
 
 @asynccontextmanager
@@ -26,6 +27,8 @@ def _register_probes_and_collectors() -> None:
 
 
 app = FastAPI(title="Provenance", version="1.0.0", lifespan=lifespan)
+
+app.include_router(v1_router)
 
 
 @app.get("/health", tags=["meta"])
