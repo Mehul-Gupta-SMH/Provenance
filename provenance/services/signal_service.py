@@ -7,11 +7,12 @@ flat and deserialized via the *_to_read helpers, matching the entity_to_read
 convention in models/entity.py.
 """
 
-from typing import List
+from typing import List, Optional
 
 from sqlmodel import Session, select
 
 from provenance.models.citation import Citation, CitationRead, citation_to_read
+from provenance.models.data_point import DataPoint, DataPointRead, data_point_to_read
 from provenance.models.demand_signal import (
     DemandSignal,
     DemandSignalRead,
@@ -63,3 +64,14 @@ def list_demand_for_run(run_id: int, session: Session) -> List[DemandSignalRead]
     _require_run(run_id, session)
     signals = session.exec(select(DemandSignal).where(DemandSignal.run_id == run_id)).all()
     return [demand_signal_to_read(s) for s in signals]
+
+
+def list_datapoints_for_run(
+    run_id: int, session: Session, signal_family: Optional[str] = None
+) -> List[DataPointRead]:
+    _require_run(run_id, session)
+    query = select(DataPoint).where(DataPoint.run_id == run_id)
+    if signal_family is not None:
+        query = query.where(DataPoint.signal_family == signal_family)
+    data_points = session.exec(query).all()
+    return [data_point_to_read(d) for d in data_points]

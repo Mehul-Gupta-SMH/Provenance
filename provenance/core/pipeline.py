@@ -32,6 +32,7 @@ from provenance.config import Settings
 from provenance.core.divergence import DivergenceEngine
 from provenance.core.registry import CollectorRegistry, ProbeRegistry
 from provenance.models.citation import Citation
+from provenance.models.data_point import DataPoint
 from provenance.models.demand_signal import DemandSignal
 from provenance.models.entity import Entity
 from provenance.models.llm_signal import LLMSignal
@@ -85,6 +86,13 @@ class RunPipeline:
 
             await self._collect_demand_signal(entity, run)
 
+            try:
+                await self._collect_social_signals(entity, run)
+            except Exception:
+                # Social signals are best-effort DataPoint rows — a failure here
+                # must never fail an otherwise-healthy run.
+                logger.exception("Social signal collection failed for run %s", run_id)
+
             total_probes = 0
             failed_probes = 0
             for provider_name in _PROVIDERS:
@@ -132,6 +140,34 @@ class RunPipeline:
             geographic_distribution_json=json.dumps(result.geographic_distribution),
         )
         self.session.add(signal)
+        self.session.commit()
+
+    # ------------------------------------------------------------------
+    # Social signal (once per run, own entity only) — writes to DataPoint
+    # ------------------------------------------------------------------
+
+    async def _collect_social_signals(self, entity: Entity, run: Run) -> None:
+        collector_cls = CollectorRegistry.get("social")
+        collector = collector_cls(self.settings)
+        # SocialCollector is sync (requests) — run off the event loop.
+        results = await asyncio.to_thread(collector.collect, entity.name)
+
+        for result in results:
+            if result.error:
+                logger.warning(
+                    "Social signal collection error for run %s: %s", run.id, result.error
+                )
+                continue
+            self.session.add(
+                DataPoint(
+                    run_id=run.id,
+                    signal_family="social",
+                    signal_key=result.signal_key,
+                    signal_value=result.signal_value,
+                    signal_text=result.signal_text,
+                    collector_name="social",
+                )
+            )
         self.session.commit()
 
     # ------------------------------------------------------------------

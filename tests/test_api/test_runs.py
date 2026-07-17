@@ -272,3 +272,82 @@ def test_signal_endpoints_missing_run_returns_404(client):
         response = client.get(f"/v1/runs/999999/{path}")
         assert response.status_code == 404
         assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# DataPoint read endpoint: GET /runs/{run_id}/datapoints
+# ---------------------------------------------------------------------------
+
+
+def test_list_datapoints_for_run_returns_rows(client, session, make_entity, make_run):
+    from provenance.models.data_point import DataPoint
+
+    entity = make_entity()
+    run = make_run(entity.id)
+    session.add(
+        DataPoint(
+            run_id=run.id,
+            signal_family="social",
+            signal_key="hn_story_count",
+            signal_value=3.0,
+            collector_name="social",
+        )
+    )
+    session.add(
+        DataPoint(
+            run_id=run.id,
+            signal_family="other",
+            signal_key="something_else",
+            signal_value=1.0,
+            collector_name="other",
+        )
+    )
+    session.commit()
+
+    response = client.get(f"/v1/runs/{run.id}/datapoints")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    assert all(dp["run_id"] == run.id for dp in body)
+    assert all(dp["entry_id"] is None for dp in body)
+
+
+def test_list_datapoints_for_run_filters_by_signal_family(client, session, make_entity, make_run):
+    from provenance.models.data_point import DataPoint
+
+    entity = make_entity()
+    run = make_run(entity.id)
+    session.add(
+        DataPoint(
+            run_id=run.id,
+            signal_family="social",
+            signal_key="hn_story_count",
+            signal_value=3.0,
+            collector_name="social",
+        )
+    )
+    session.add(
+        DataPoint(
+            run_id=run.id,
+            signal_family="other",
+            signal_key="something_else",
+            signal_value=1.0,
+            collector_name="other",
+        )
+    )
+    session.commit()
+
+    response = client.get(f"/v1/runs/{run.id}/datapoints", params={"signal_family": "social"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["signal_key"] == "hn_story_count"
+
+
+def test_list_datapoints_for_run_missing_run_returns_404(client):
+    response = client.get("/v1/runs/999999/datapoints")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"

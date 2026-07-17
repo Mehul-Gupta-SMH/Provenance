@@ -13,6 +13,7 @@ from provenance.config import Settings, get_settings
 from provenance.core.divergence import DivergenceEngine
 from provenance.core.divergence import RunNotFoundError as DivergenceRunNotFoundError
 from provenance.models.citation import CitationRead
+from provenance.models.data_point import DataPointRead
 from provenance.models.database import engine, get_session
 from provenance.models.demand_signal import DemandSignalRead
 from provenance.models.divergence_score import DivergenceScore
@@ -154,6 +155,21 @@ def list_citations(run_id: int, session: Session = Depends(get_session)) -> List
 def list_demand(run_id: int, session: Session = Depends(get_session)) -> List[DemandSignalRead]:
     try:
         return signal_service.list_demand_for_run(run_id, session)
+    except SignalRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+
+
+@router.get("/{run_id}/datapoints", response_model=List[DataPointRead])
+def list_datapoints(
+    run_id: int,
+    signal_family: Optional[str] = Query(default=None),
+    session: Session = Depends(get_session),
+) -> List[DataPointRead]:
+    try:
+        return signal_service.list_datapoints_for_run(run_id, session, signal_family=signal_family)
     except SignalRunNotFoundError as exc:
         raise HTTPException(
             status_code=404,
