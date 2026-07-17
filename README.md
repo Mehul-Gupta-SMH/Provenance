@@ -160,6 +160,10 @@ All routes are versioned under `/v1/`. Error responses use a structured body: `{
 | `GET` | `/v1/runs` | Query: `entity_id?`, `skip`, `limit` | `200` `List[RunRead]` |
 | `POST` | `/v1/runs/{run_id}/divergence` | — | `200` `DivergenceScore` (recomputes and upserts), or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/divergence` | — | `200` `DivergenceScore`, or `404 DIVERGENCE_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/probes` | — | `200` `List[QueryProbeRead]` (raw per-probe observations), or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/signals` | — | `200` `List[LLMSignalRead]` (extracted recommendation signals; `co_mentioned_entities` deserialized), or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/citations` | — | `200` `List[CitationRead]`, or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/demand` | — | `200` `List[DemandSignalRead]` (`related_queries` / `geographic_distribution` deserialized), or `404 RUN_NOT_FOUND` |
 
 ### Analysis (`/v1/analysis`)
 

@@ -10,12 +10,18 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from provenance.config import Settings, get_settings
-from provenance.core.divergence import DivergenceEngine, RunNotFoundError
+from provenance.core.divergence import DivergenceEngine
+from provenance.core.divergence import RunNotFoundError as DivergenceRunNotFoundError
+from provenance.models.citation import CitationRead
 from provenance.models.database import engine, get_session
+from provenance.models.demand_signal import DemandSignalRead
 from provenance.models.divergence_score import DivergenceScore
+from provenance.models.llm_signal import LLMSignalRead
+from provenance.models.query_probe import QueryProbeRead
 from provenance.models.run import Run, RunCreate, RunRead
-from provenance.services import run_service
+from provenance.services import run_service, signal_service
 from provenance.services.run_service import EntityNotFoundError, ExperimentNotFoundError
+from provenance.services.signal_service import RunNotFoundError as SignalRunNotFoundError
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -89,7 +95,7 @@ def list_runs(
 def compute_divergence(run_id: int, session: Session = Depends(get_session)) -> DivergenceScore:
     try:
         return DivergenceEngine(session).compute_for_run(run_id)
-    except RunNotFoundError as exc:
+    except DivergenceRunNotFoundError as exc:
         raise HTTPException(
             status_code=404,
             detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
@@ -108,3 +114,47 @@ def get_divergence(run_id: int, session: Session = Depends(get_session)) -> Dive
             },
         )
     return score
+
+
+@router.get("/{run_id}/probes", response_model=List[QueryProbeRead])
+def list_probes(run_id: int, session: Session = Depends(get_session)) -> List[QueryProbeRead]:
+    try:
+        return signal_service.list_probes_for_run(run_id, session)
+    except SignalRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+
+
+@router.get("/{run_id}/signals", response_model=List[LLMSignalRead])
+def list_signals(run_id: int, session: Session = Depends(get_session)) -> List[LLMSignalRead]:
+    try:
+        return signal_service.list_signals_for_run(run_id, session)
+    except SignalRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+
+
+@router.get("/{run_id}/citations", response_model=List[CitationRead])
+def list_citations(run_id: int, session: Session = Depends(get_session)) -> List[CitationRead]:
+    try:
+        return signal_service.list_citations_for_run(run_id, session)
+    except SignalRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+
+
+@router.get("/{run_id}/demand", response_model=List[DemandSignalRead])
+def list_demand(run_id: int, session: Session = Depends(get_session)) -> List[DemandSignalRead]:
+    try:
+        return signal_service.list_demand_for_run(run_id, session)
+    except SignalRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
