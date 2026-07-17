@@ -1,7 +1,8 @@
-from sqlmodel import SQLModel, Field
-from typing import Optional, List
-from datetime import datetime
 import json
+from datetime import datetime
+from typing import List, Optional
+
+from sqlmodel import Field, SQLModel
 
 
 class EntityBase(SQLModel):

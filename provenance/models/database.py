@@ -1,5 +1,7 @@
-from sqlmodel import SQLModel, create_engine, Session
 from typing import Generator
+
+from sqlmodel import Session, SQLModel, create_engine
+
 from provenance.config import get_settings
 
 

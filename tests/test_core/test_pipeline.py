@@ -1,0 +1,183 @@
+"""Tests for provenance/core/pipeline.py (PLAN.md section 14, Pipeline 9-12).
+
+AnthropicProbe.probe and DemandCollector.collect are monkeypatched at the class
+level so no network access or ANTHROPIC_API_KEY is required. CitationExtractor
+is real (pure text processing).
+"""
+from __future__ import annotations
+
+import json
+
+import pytest
+from sqlmodel import select
+
+from provenance.collectors.demand import DemandCollector
+from provenance.core.pipeline import RunPipeline
+from provenance.core.registry import CollectorRegistry, ProbeRegistry
+from provenance.models.citation import Citation
+from provenance.models.demand_signal import DemandSignal
+from provenance.models.divergence_score import DivergenceScore
+from provenance.models.llm_signal import LLMSignal
+from provenance.models.query_probe import QueryProbe
+from provenance.models.run import Run, RunStatus
+from provenance.probes.anthropic import AnthropicProbe
+
+
+@pytest.fixture(autouse=True)
+def _register_real_classes():
+    """RunPipeline resolves probes/collectors via the registries — register the
+    real classes (methods are monkeypatched per-test) since main.py's startup
+    hook that normally does this doesn't run for these core-level tests."""
+    ProbeRegistry.register("anthropic", AnthropicProbe)
+    CollectorRegistry.register("demand", DemandCollector)
+
+
+async def test_pipeline_completed_run_writes_expected_rows(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    entity = make_entity(name="Acme", category="graph database", competitors=["Rival"])
+    run = make_run(entity.id)
+
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+    competitor = make_extracted_entity(
+        name="Rival", recommendation_rank=2, mention_type="alternative"
+    )
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great. See https://acme.example.com/{query_variant}.",
+            extracted_entities=[own, competitor],
+        )
+
+    def fake_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_collect)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+    assert run.error_message is None
+
+    probes = session.exec(select(QueryProbe).where(QueryProbe.run_id == run.id)).all()
+    assert len(probes) == 4
+    assert {p.query_variant for p in probes} == {
+        "direct", "comparative", "expert", "contrarian",
+    }
+
+    entry_ids = [p.id for p in probes]
+    signals = session.exec(select(LLMSignal).where(LLMSignal.entry_id.in_(entry_ids))).all()
+    assert len(signals) == 4
+    for sig in signals:
+        assert sig.entry_id in entry_ids
+        assert sig.recommendation_rank == 1
+        assert sig.mention_type == "primary"
+        assert json.loads(sig.co_mentioned_entities_json) == ["Rival"]
+
+    demand_signals = session.exec(
+        select(DemandSignal).where(DemandSignal.run_id == run.id)
+    ).all()
+    assert len(demand_signals) == 1
+
+    citations = session.exec(select(Citation).where(Citation.entry_id.in_(entry_ids))).all()
+    assert len(citations) == 4
+
+    divergence = session.exec(
+        select(DivergenceScore).where(DivergenceScore.run_id == run.id)
+    ).first()
+    assert divergence is not None
+    assert divergence.probes_included == 4
+
+
+async def test_pipeline_all_probes_fail_marks_run_failed(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result,
+):
+    entity = make_entity(name="Acme", category="graph database")
+    run = make_run(entity.id)
+
+    async def fake_probe_error(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant, raw_response="", extracted_entities=[], error="boom"
+        )
+
+    def fake_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe_error)
+    monkeypatch.setattr(DemandCollector, "collect", fake_collect)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.failed
+    assert run.error_message is not None
+
+    divergence = session.exec(
+        select(DivergenceScore).where(DivergenceScore.run_id == run.id)
+    ).first()
+    assert divergence is None
+
+
+async def test_pipeline_partial_failure_still_completes(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    entity = make_entity(name="Acme", category="graph database")
+    run = make_run(entity.id)
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe_partial(
+        self, query, query_variant, entity_name, context, competitors=None
+    ):
+        if query_variant == "contrarian":
+            return make_probe_result(
+                query_variant=query_variant,
+                raw_response="",
+                extracted_entities=[],
+                error="timeout",
+            )
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is solid.",
+            extracted_entities=[own],
+        )
+
+    def fake_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe_partial)
+    monkeypatch.setattr(DemandCollector, "collect", fake_collect)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    divergence = session.exec(
+        select(DivergenceScore).where(DivergenceScore.run_id == run.id)
+    ).first()
+    assert divergence is not None
+    # the "contrarian" probe soft-failed and is excluded from probes_included
+    assert divergence.probes_included == 3
+
+
+async def test_pipeline_missing_entity_fails_run(session, test_settings):
+    run = Run(entity_id=999999, status=RunStatus.pending)
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.failed
+    assert "999999" in run.error_message

@@ -1,11 +1,12 @@
-from sqlmodel import SQLModel, Field
-from sqlalchemy import Index
 from typing import Optional
+
+from sqlalchemy import Index
+from sqlmodel import Field, SQLModel
 
 
 class LLMSignal(SQLModel, table=True):
     __tablename__ = "llm_signal"
-    # Composite index for the primary read pattern: all signals for a probe, filtered by mention type
+    # Composite index for the primary read pattern: all signals for a probe, by mention type
     __table_args__ = (
         Index("ix_llm_signal_entry_mention", "entry_id", "mention_type"),
     )
@@ -18,7 +19,7 @@ class LLMSignal(SQLModel, table=True):
 
     # Recommendation signals
     recommendation_rank: Optional[int] = None   # 1-based; None = absent
-    mention_type: str = "absent"                 # "primary" | "alternative" | "cautionary" | "absent"
+    mention_type: str = "absent"  # "primary" | "alternative" | "cautionary" | "absent"
     phrasing_sentiment: Optional[str] = None    # "positive" | "neutral" | "qualified"
     context_of_mention: Optional[str] = None
 

@@ -1,6 +1,7 @@
-from sqlmodel import SQLModel, Field
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+
+from sqlmodel import Field, SQLModel
 
 
 class Citation(SQLModel, table=True):
@@ -13,5 +14,5 @@ class Citation(SQLModel, table=True):
     cited_url: str
     domain: str
     page_recency: Optional[datetime] = None
-    content_type: Optional[str] = None          # "docs" | "blog" | "comparison" | "review" | "forum"
+    content_type: Optional[str] = None  # "docs" | "blog" | "comparison" | "review" | "forum"
     entity_mention_count: Optional[int] = None

@@ -1,7 +1,8 @@
-from sqlmodel import SQLModel, Field
-from sqlalchemy import Index
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import Index
+from sqlmodel import Field, SQLModel
 
 
 class DataPoint(SQLModel, table=True):
