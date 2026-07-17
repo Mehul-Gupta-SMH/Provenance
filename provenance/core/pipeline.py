@@ -36,7 +36,7 @@ from provenance.models.demand_signal import DemandSignal
 from provenance.models.entity import Entity
 from provenance.models.llm_signal import LLMSignal
 from provenance.models.query_probe import QueryProbe
-from provenance.models.run import Run, RunStatus
+from provenance.models.run import ProbeContextSpec, Run, RunStatus
 from provenance.probes.base import ExtractedEntity, ProbeContext
 
 logger = logging.getLogger(__name__)
@@ -149,87 +149,109 @@ class RunPipeline:
         probe_cls = ProbeRegistry.get(provider_name)
         probe = probe_cls(self.settings)
         citation_extractor = CitationExtractor(self.settings)
-        context = self._build_probe_context()
+        contexts = self._build_probe_contexts(run)
 
         total = 0
         failed = 0
-        for variant, template in _QUERY_TEMPLATES.items():
-            query = template.format(category=entity.category)
+        for context in contexts:
+            for variant, template in _QUERY_TEMPLATES.items():
+                query = template.format(category=entity.category)
 
-            result = await probe.probe(
-                query=query,
-                query_variant=variant,
-                entity_name=entity.name,
-                context=context,
-                competitors=competitors,
-            )
-            total += 1
-            if result.error:
-                failed += 1
-
-            raw_response = result.raw_response
-            if result.error:
-                # QueryProbe has no dedicated error column — the soft-failure is
-                # captured in raw_response itself so the row still records it.
-                raw_response = f"[PROBE ERROR] {result.error}"
-
-            qp = QueryProbe(
-                run_id=run.id,
-                query_variant=variant,
-                query_text=query,
-                raw_response=raw_response,
-                probed_at=result.probed_at,
-                country=context.country,
-                region=context.region,
-                language=context.language,
-                locale=context.locale,
-                user_persona=context.user_persona,
-                expertise_level=context.expertise_level,
-                stated_use_case=context.stated_use_case,
-                provider=result.provider,
-                model=result.model,
-                temperature=context.temperature,
-                system_prompt_variant=context.system_prompt_variant,
-                prior_context=context.prior_context,
-            )
-            self.session.add(qp)
-            self.session.flush()  # populate qp.id for the FKs below, without committing yet
-
-            # One LLMSignal row per probe, describing the run's own entity only.
-            # Competitors are folded into co_mentioned_entities_json (delta #2).
-            own_entity = self._find_own_entity(result.extracted_entities, entity.name)
-            co_mentioned = [
-                e.name
-                for e in result.extracted_entities
-                if e.name.lower() != entity.name.lower()
-            ]
-            signal = LLMSignal(
-                entry_id=qp.id,
-                recommendation_rank=own_entity.recommendation_rank if own_entity else None,
-                mention_type=own_entity.mention_type if own_entity else "absent",
-                phrasing_sentiment=own_entity.phrasing_sentiment if own_entity else None,
-                context_of_mention=own_entity.context_of_mention if own_entity else None,
-                co_mentioned_entities_json=json.dumps(co_mentioned),
-            )
-            self.session.add(signal)
-
-            for c in citation_extractor.collect(result.raw_response, entity.name):
-                citation = Citation(
-                    entry_id=qp.id,
-                    cited_url=c.cited_url,
-                    domain=c.domain,
-                    content_type=c.content_type,
-                    entity_mention_count=c.entity_mention_count,
+                result = await probe.probe(
+                    query=query,
+                    query_variant=variant,
+                    entity_name=entity.name,
+                    context=context,
+                    competitors=competitors,
                 )
-                self.session.add(citation)
+                total += 1
+                if result.error:
+                    failed += 1
 
-            self.session.commit()
+                raw_response = result.raw_response
+                if result.error:
+                    # QueryProbe has no dedicated error column — the soft-failure is
+                    # captured in raw_response itself so the row still records it.
+                    raw_response = f"[PROBE ERROR] {result.error}"
+
+                qp = QueryProbe(
+                    run_id=run.id,
+                    query_variant=variant,
+                    query_text=query,
+                    raw_response=raw_response,
+                    probed_at=result.probed_at,
+                    country=context.country,
+                    region=context.region,
+                    language=context.language,
+                    locale=context.locale,
+                    user_persona=context.user_persona,
+                    expertise_level=context.expertise_level,
+                    stated_use_case=context.stated_use_case,
+                    provider=result.provider,
+                    model=result.model,
+                    temperature=context.temperature,
+                    system_prompt_variant=context.system_prompt_variant,
+                    prior_context=context.prior_context,
+                )
+                self.session.add(qp)
+                self.session.flush()  # populate qp.id for the FKs below, without committing yet
+
+                # One LLMSignal row per probe, describing the run's own entity only.
+                # Competitors are folded into co_mentioned_entities_json (delta #2).
+                own_entity = self._find_own_entity(result.extracted_entities, entity.name)
+                co_mentioned = [
+                    e.name
+                    for e in result.extracted_entities
+                    if e.name.lower() != entity.name.lower()
+                ]
+                signal = LLMSignal(
+                    entry_id=qp.id,
+                    recommendation_rank=own_entity.recommendation_rank if own_entity else None,
+                    mention_type=own_entity.mention_type if own_entity else "absent",
+                    phrasing_sentiment=own_entity.phrasing_sentiment if own_entity else None,
+                    context_of_mention=own_entity.context_of_mention if own_entity else None,
+                    co_mentioned_entities_json=json.dumps(co_mentioned),
+                )
+                self.session.add(signal)
+
+                for c in citation_extractor.collect(result.raw_response, entity.name):
+                    citation = Citation(
+                        entry_id=qp.id,
+                        cited_url=c.cited_url,
+                        domain=c.domain,
+                        content_type=c.content_type,
+                        entity_mention_count=c.entity_mention_count,
+                    )
+                    self.session.add(citation)
+
+                self.session.commit()
 
         return total, failed
 
-    def _build_probe_context(self) -> ProbeContext:
-        """Default probe context from settings. v1 does not vary persona/geo per run."""
-        return ProbeContext(temperature=self.settings.anthropic_default_temperature)
+    def _build_probe_contexts(self, run: Run) -> List[ProbeContext]:
+        """One ProbeContext per entry in run.probe_contexts_json (the fan-out matrix).
+
+        An empty list (today's default RunCreate) yields a single default context —
+        byte-for-byte identical to v1's pre-context-sweep behavior.
+        """
+        specs = json.loads(run.probe_contexts_json)
+        if not specs:
+            specs = [{}]
+        return [self._build_probe_context(ProbeContextSpec(**spec)) for spec in specs]
+
+    def _build_probe_context(self, spec: ProbeContextSpec) -> ProbeContext:
+        """Build a ProbeContext from a spec, falling back to ProbeContext's own
+        defaults for unset fields (temperature falls back to the configured
+        Anthropic default, as v1 did before context sweep existed)."""
+        kwargs: Dict[str, object] = {"temperature": self.settings.anthropic_default_temperature}
+        for field_name in (
+            "country", "region", "language", "locale", "user_persona",
+            "expertise_level", "stated_use_case", "temperature", "system_prompt_variant",
+        ):
+            value = getattr(spec, field_name)
+            if value is not None:
+                kwargs[field_name] = value
+        return ProbeContext(**kwargs)
 
     def _find_own_entity(
         self, extracted_entities: List[ExtractedEntity], entity_name: str

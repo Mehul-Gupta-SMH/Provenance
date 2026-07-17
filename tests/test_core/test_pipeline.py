@@ -169,6 +169,142 @@ async def test_pipeline_partial_failure_still_completes(
     assert divergence.probes_included == 3
 
 
+async def test_pipeline_probe_contexts_fan_out_produces_matrix(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    """2 probe_contexts x 4 variants -> 8 QueryProbe rows with distinct persona/
+    temperature values in the flat columns, and 8 LLMSignals."""
+    import json as _json
+
+    from provenance.models.run import ProbeContextSpec
+
+    entity = make_entity(name="Acme", category="graph database")
+    run = make_run(entity.id)
+    run.probe_contexts_json = _json.dumps([
+        ProbeContextSpec(user_persona="developer", temperature=0.1).model_dump(),
+        ProbeContextSpec(user_persona="executive", temperature=0.9).model_dump(),
+    ])
+    session.add(run)
+    session.commit()
+
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_collect)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    probes = session.exec(select(QueryProbe).where(QueryProbe.run_id == run.id)).all()
+    assert len(probes) == 8
+
+    personas_and_temps = {(p.user_persona, p.temperature) for p in probes}
+    assert personas_and_temps == {("developer", 0.1), ("executive", 0.9)}
+
+    entry_ids = [p.id for p in probes]
+    signals = session.exec(select(LLMSignal).where(LLMSignal.entry_id.in_(entry_ids))).all()
+    assert len(signals) == 8
+
+
+async def test_pipeline_empty_probe_contexts_matches_today_default(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    """Empty probe_contexts (today's default RunCreate) -> exactly today's 4 rows."""
+    entity = make_entity(name="Acme", category="graph database")
+    run = make_run(entity.id)
+    assert run.probe_contexts_json == "[]"
+
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_collect)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    probes = session.exec(select(QueryProbe).where(QueryProbe.run_id == run.id)).all()
+    assert len(probes) == 4
+    for p in probes:
+        assert p.user_persona is None
+        assert p.temperature == test_settings.anthropic_default_temperature
+
+
+async def test_pipeline_mixed_context_partial_failure_keeps_run_completed(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    """One context's probes all error, the other context's probes succeed ->
+    run still completes since not ALL probes across the matrix failed."""
+    import json as _json
+
+    from provenance.models.run import ProbeContextSpec
+
+    entity = make_entity(name="Acme", category="graph database")
+    run = make_run(entity.id)
+    run.probe_contexts_json = _json.dumps([
+        ProbeContextSpec(user_persona="developer").model_dump(),
+        ProbeContextSpec(user_persona="executive").model_dump(),
+    ])
+    session.add(run)
+    session.commit()
+
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        if context.user_persona == "executive":
+            return make_probe_result(
+                query_variant=query_variant, raw_response="", extracted_entities=[], error="boom"
+            )
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_collect)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    probes = session.exec(select(QueryProbe).where(QueryProbe.run_id == run.id)).all()
+    assert len(probes) == 8
+
+
 async def test_pipeline_missing_entity_fails_run(session, test_settings):
     run = Run(entity_id=999999, status=RunStatus.pending)
     session.add(run)

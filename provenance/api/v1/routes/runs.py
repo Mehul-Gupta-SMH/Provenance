@@ -18,7 +18,7 @@ from provenance.models.demand_signal import DemandSignalRead
 from provenance.models.divergence_score import DivergenceScore
 from provenance.models.llm_signal import LLMSignalRead
 from provenance.models.query_probe import QueryProbeRead
-from provenance.models.run import Run, RunCreate, RunRead
+from provenance.models.run import RunCreate, RunRead, run_to_read
 from provenance.services import run_service, signal_service
 from provenance.services.run_service import EntityNotFoundError, ExperimentNotFoundError
 from provenance.services.signal_service import RunNotFoundError as SignalRunNotFoundError
@@ -49,7 +49,7 @@ def create_run(
     run_in: RunCreate,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
-) -> Run:
+) -> RunRead:
     try:
         run = run_service.create_run(run_in, session)
     except EntityNotFoundError as exc:
@@ -67,18 +67,18 @@ def create_run(
     background_tasks.add_task(_run_pipeline, run.id, get_settings())
     # --- END PIPELINE HOOK ---
 
-    return run
+    return run_to_read(run)
 
 
 @router.get("/{run_id}", response_model=RunRead)
-def get_run(run_id: int, session: Session = Depends(get_session)) -> Run:
+def get_run(run_id: int, session: Session = Depends(get_session)) -> RunRead:
     run = run_service.get_run(run_id, session)
     if run is None:
         raise HTTPException(
             status_code=404,
             detail={"error": "RUN_NOT_FOUND", "detail": f"Run {run_id} not found"},
         )
-    return run
+    return run_to_read(run)
 
 
 @router.get("", response_model=List[RunRead])
@@ -87,8 +87,9 @@ def list_runs(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
     session: Session = Depends(get_session),
-) -> List[Run]:
-    return run_service.list_runs(session, entity_id=entity_id, skip=skip, limit=limit)
+) -> List[RunRead]:
+    runs = run_service.list_runs(session, entity_id=entity_id, skip=skip, limit=limit)
+    return [run_to_read(r) for r in runs]
 
 
 @router.post("/{run_id}/divergence", response_model=DivergenceScore)

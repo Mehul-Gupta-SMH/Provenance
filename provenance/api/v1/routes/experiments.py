@@ -1,15 +1,34 @@
-"""Experiment CRUD routes (create/get/list only for v1). No business logic here."""
+"""Experiment CRUD routes (create/get/list only for v1), plus read-time analytics
+(comparison/drift) and run-listing. No business logic here — analytics delegate to
+core/experiment_analysis.py and run-listing delegates to experiment_service."""
 
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
+from provenance.core.experiment_analysis import (
+    ExperimentAnalyzer,
+    ExperimentComparison,
+    ExperimentDrift,
+    ExperimentNotFoundError,
+)
 from provenance.models.database import get_session
 from provenance.models.experiment import Experiment, ExperimentCreate, ExperimentRead
+from provenance.models.run import RunRead, run_to_read
 from provenance.services import experiment_service
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
+
+
+def _not_found(experiment_id: int) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "error": "EXPERIMENT_NOT_FOUND",
+            "detail": f"Experiment {experiment_id} not found",
+        },
+    )
 
 
 @router.post("", response_model=ExperimentRead, status_code=201)
@@ -40,3 +59,34 @@ def get_experiment(experiment_id: int, session: Session = Depends(get_session)) 
             },
         )
     return experiment
+
+
+@router.get("/{experiment_id}/runs", response_model=List[RunRead])
+def list_experiment_runs(
+    experiment_id: int, session: Session = Depends(get_session)
+) -> List[RunRead]:
+    try:
+        runs = experiment_service.list_runs_for_experiment(experiment_id, session)
+    except experiment_service.ExperimentNotFoundError as exc:
+        raise _not_found(experiment_id) from exc
+    return [run_to_read(r) for r in runs]
+
+
+@router.get("/{experiment_id}/comparison", response_model=ExperimentComparison)
+def get_experiment_comparison(
+    experiment_id: int, session: Session = Depends(get_session)
+) -> ExperimentComparison:
+    try:
+        return ExperimentAnalyzer(session).compare(experiment_id)
+    except ExperimentNotFoundError as exc:
+        raise _not_found(experiment_id) from exc
+
+
+@router.get("/{experiment_id}/drift", response_model=ExperimentDrift)
+def get_experiment_drift(
+    experiment_id: int, session: Session = Depends(get_session)
+) -> ExperimentDrift:
+    try:
+        return ExperimentAnalyzer(session).drift(experiment_id)
+    except ExperimentNotFoundError as exc:
+        raise _not_found(experiment_id) from exc

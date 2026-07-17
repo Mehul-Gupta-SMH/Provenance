@@ -150,12 +150,15 @@ All routes are versioned under `/v1/`. Error responses use a structured body: `{
 | `POST` | `/v1/experiments` | `ExperimentCreate`: `name`, `description?`, `config_json?` | `201` `ExperimentRead` |
 | `GET` | `/v1/experiments` | Query: `skip`, `limit` | `200` `List[ExperimentRead]` |
 | `GET` | `/v1/experiments/{experiment_id}` | — | `200` `ExperimentRead`, or `404 EXPERIMENT_NOT_FOUND` |
+| `GET` | `/v1/experiments/{experiment_id}/runs` | — | `200` `List[RunRead]`, or `404 EXPERIMENT_NOT_FOUND` |
+| `GET` | `/v1/experiments/{experiment_id}/comparison` | — | `200` `ExperimentComparison` (per-run divergence snapshots + first→last metric deltas), or `404 EXPERIMENT_NOT_FOUND` |
+| `GET` | `/v1/experiments/{experiment_id}/drift` | — | `200` `ExperimentDrift` (per-entity time series of alignment/rank/stability), or `404 EXPERIMENT_NOT_FOUND` |
 
 ### Runs (`/v1/runs`)
 
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
-| `POST` | `/v1/runs` | `RunCreate`: `entity_id`, `mode?` (`isolation` \| `aggregate`), `experiment_id?` | `201` `RunRead` (`status=pending`); schedules pipeline execution as a background task. `404 ENTITY_NOT_FOUND` / `404 EXPERIMENT_NOT_FOUND` |
+| `POST` | `/v1/runs` | `RunCreate`: `entity_id`, `mode?` (`isolation` \| `aggregate`), `experiment_id?`, `probe_contexts?` (up to 10 `ProbeContextSpec` entries — persona/expertise/locale/temperature overrides; the pipeline fans out contexts × query variants) | `201` `RunRead` (`status=pending`); schedules pipeline execution as a background task. `404 ENTITY_NOT_FOUND` / `404 EXPERIMENT_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}` | — | `200` `RunRead`, or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs` | Query: `entity_id?`, `skip`, `limit` | `200` `List[RunRead]` |
 | `POST` | `/v1/runs/{run_id}/divergence` | — | `200` `DivergenceScore` (recomputes and upserts), or `404 RUN_NOT_FOUND` |

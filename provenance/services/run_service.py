@@ -5,6 +5,7 @@ reads it back. Pipeline execution (probes/collectors/divergence) is wired up
 in a later phase — see the hook comment in api/v1/routes/runs.py.
 """
 
+import json
 from typing import List, Optional
 
 from sqlmodel import Session, select
@@ -37,6 +38,9 @@ def create_run(run_in: RunCreate, session: Session) -> Run:
         experiment_id=run_in.experiment_id,
         mode=run_in.mode,
         status=RunStatus.pending,
+        probe_contexts_json=json.dumps(
+            [c.model_dump() for c in run_in.probe_contexts]
+        ),
     )
     session.add(run)
     session.commit()

@@ -119,6 +119,60 @@ def test_list_runs_pagination_params(client):
 
 
 # ---------------------------------------------------------------------------
+# Context sweep: probe_contexts on RunCreate/RunRead
+# ---------------------------------------------------------------------------
+
+
+def test_create_run_with_probe_contexts_stores_and_returns_specs(client, make_entity):
+    entity = make_entity()
+
+    response = client.post(
+        "/v1/runs",
+        json={
+            "entity_id": entity.id,
+            "probe_contexts": [
+                {"user_persona": "developer", "temperature": 0.1},
+                {"user_persona": "executive", "locale": "en-GB"},
+            ],
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert len(body["probe_contexts"]) == 2
+    assert body["probe_contexts"][0]["user_persona"] == "developer"
+    assert body["probe_contexts"][0]["temperature"] == 0.1
+    assert body["probe_contexts"][1]["locale"] == "en-GB"
+
+    get_response = client.get(f"/v1/runs/{body['id']}")
+    assert get_response.status_code == 200
+    assert len(get_response.json()["probe_contexts"]) == 2
+
+
+def test_create_run_without_probe_contexts_returns_empty_list(client, make_entity):
+    entity = make_entity()
+
+    response = client.post("/v1/runs", json={"entity_id": entity.id})
+
+    assert response.status_code == 201
+    assert response.json()["probe_contexts"] == []
+
+
+def test_create_run_too_many_probe_contexts_returns_422(client, make_entity):
+    entity = make_entity()
+
+    response = client.post(
+        "/v1/runs",
+        json={
+            "entity_id": entity.id,
+            "probe_contexts": [{"user_persona": f"persona-{i}"} for i in range(11)],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Signal-read endpoints (PLAN.md section 12): probes, signals, citations, demand
 # ---------------------------------------------------------------------------
 
