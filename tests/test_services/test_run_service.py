@@ -1,11 +1,14 @@
 """Tests for provenance/services/run_service.py (PLAN.md section 14, Services)."""
 from __future__ import annotations
 
+import json
+
 import pytest
+from pydantic import ValidationError
 
 from provenance.models.entity import EntityCreate
 from provenance.models.experiment import ExperimentCreate
-from provenance.models.run import RunCreate, RunMode, RunStatus
+from provenance.models.run import ProbeContextSpec, RunCreate, RunMode, RunStatus
 from provenance.services import entity_service, experiment_service, run_service
 
 
@@ -51,6 +54,41 @@ def test_create_run_with_experiment(session):
     )
 
     assert run.experiment_id == experiment.id
+
+
+def test_create_run_serializes_probe_contexts(session):
+    entity = entity_service.create_entity(
+        EntityCreate(name="Acme", category="graph database"), session
+    )
+
+    run = run_service.create_run(
+        RunCreate(
+            entity_id=entity.id,
+            probe_contexts=[ProbeContextSpec(user_persona="developer", temperature=0.5)],
+        ),
+        session,
+    )
+
+    stored = json.loads(run.probe_contexts_json)
+    assert stored == [{
+        "country": None,
+        "region": None,
+        "language": None,
+        "locale": None,
+        "user_persona": "developer",
+        "expertise_level": None,
+        "stated_use_case": None,
+        "temperature": 0.5,
+        "system_prompt_variant": None,
+    }]
+
+
+def test_create_run_rejects_more_than_max_probe_contexts():
+    with pytest.raises(ValidationError):
+        RunCreate(
+            entity_id=1,
+            probe_contexts=[ProbeContextSpec(user_persona=f"p{i}") for i in range(11)],
+        )
 
 
 def test_get_and_list_runs(session):

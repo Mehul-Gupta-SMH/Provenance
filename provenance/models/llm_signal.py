@@ -1,4 +1,5 @@
-from typing import Optional
+import json
+from typing import List, Optional
 
 from sqlalchemy import Index
 from sqlmodel import Field, SQLModel
@@ -28,3 +29,27 @@ class LLMSignal(SQLModel, table=True):
 
     # Stability (computed per-entity across variants in a run, stored for query convenience)
     query_sensitivity: Optional[float] = None   # 0-1
+
+
+class LLMSignalRead(SQLModel):
+    id: int
+    entry_id: int
+    recommendation_rank: Optional[int]
+    mention_type: str
+    phrasing_sentiment: Optional[str]
+    context_of_mention: Optional[str]
+    co_mentioned_entities: List[str]
+    query_sensitivity: Optional[float]
+
+
+def llm_signal_to_read(signal: LLMSignal) -> LLMSignalRead:
+    return LLMSignalRead(
+        id=signal.id,
+        entry_id=signal.entry_id,
+        recommendation_rank=signal.recommendation_rank,
+        mention_type=signal.mention_type,
+        phrasing_sentiment=signal.phrasing_sentiment,
+        context_of_mention=signal.context_of_mention,
+        co_mentioned_entities=json.loads(signal.co_mentioned_entities_json),
+        query_sensitivity=signal.query_sensitivity,
+    )

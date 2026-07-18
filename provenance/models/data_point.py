@@ -50,3 +50,33 @@ class DataPoint(SQLModel, table=True):
     collected_at: datetime = Field(default_factory=datetime.utcnow)
     collector_name: str = ""        # which collector produced this
     collector_version: str = "1.0"  # version for reproducibility tracking
+
+
+class DataPointRead(SQLModel):
+    id: int
+    run_id: Optional[int]
+    entry_id: Optional[int]
+    entity_id: Optional[int]
+    signal_family: str
+    signal_key: str
+    signal_value: Optional[float]
+    signal_text: Optional[str]
+    collected_at: datetime
+    collector_name: str
+    collector_version: str
+
+
+def data_point_to_read(data_point: DataPoint) -> DataPointRead:
+    return DataPointRead(
+        id=data_point.id,
+        run_id=data_point.run_id,
+        entry_id=data_point.entry_id,
+        entity_id=data_point.entity_id,
+        signal_family=data_point.signal_family,
+        signal_key=data_point.signal_key,
+        signal_value=data_point.signal_value,
+        signal_text=data_point.signal_text,
+        collected_at=data_point.collected_at,
+        collector_name=data_point.collector_name,
+        collector_version=data_point.collector_version,
+    )

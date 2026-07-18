@@ -116,3 +116,272 @@ def test_list_runs_filters_by_entity(client, make_entity, make_run):
 def test_list_runs_pagination_params(client):
     assert client.get("/v1/runs", params={"limit": 0}).status_code == 422
     assert client.get("/v1/runs", params={"skip": -1}).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Context sweep: probe_contexts on RunCreate/RunRead
+# ---------------------------------------------------------------------------
+
+
+def test_create_run_with_probe_contexts_stores_and_returns_specs(client, make_entity):
+    entity = make_entity()
+
+    response = client.post(
+        "/v1/runs",
+        json={
+            "entity_id": entity.id,
+            "probe_contexts": [
+                {"user_persona": "developer", "temperature": 0.1},
+                {"user_persona": "executive", "locale": "en-GB"},
+            ],
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert len(body["probe_contexts"]) == 2
+    assert body["probe_contexts"][0]["user_persona"] == "developer"
+    assert body["probe_contexts"][0]["temperature"] == 0.1
+    assert body["probe_contexts"][1]["locale"] == "en-GB"
+
+    get_response = client.get(f"/v1/runs/{body['id']}")
+    assert get_response.status_code == 200
+    assert len(get_response.json()["probe_contexts"]) == 2
+
+
+def test_create_run_without_probe_contexts_returns_empty_list(client, make_entity):
+    entity = make_entity()
+
+    response = client.post("/v1/runs", json={"entity_id": entity.id})
+
+    assert response.status_code == 201
+    assert response.json()["probe_contexts"] == []
+
+
+def test_create_run_too_many_probe_contexts_returns_422(client, make_entity):
+    entity = make_entity()
+
+    response = client.post(
+        "/v1/runs",
+        json={
+            "entity_id": entity.id,
+            "probe_contexts": [{"user_persona": f"persona-{i}"} for i in range(11)],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Signal-read endpoints (PLAN.md section 12): probes, signals, citations, demand
+# ---------------------------------------------------------------------------
+
+
+def test_list_probes_for_run_returns_rows(client, make_entity, seed_completed_run):
+    entity = make_entity()
+    run = seed_completed_run(
+        entity.id,
+        [(1, "primary", "positive", []), (2, "alternative", "neutral", [])],
+    )
+
+    response = client.get(f"/v1/runs/{run.id}/probes")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    assert {p["query_variant"] for p in body} == {"direct", "comparative"}
+    assert all(p["run_id"] == run.id for p in body)
+
+
+def test_list_signals_for_run_deserializes_co_mentioned(
+    client, make_entity, seed_completed_run
+):
+    entity = make_entity()
+    run = seed_completed_run(
+        entity.id, [(1, "primary", "positive", ["Beta", "Gamma"])]
+    )
+
+    response = client.get(f"/v1/runs/{run.id}/signals")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["co_mentioned_entities"] == ["Beta", "Gamma"]
+    assert body[0]["mention_type"] == "primary"
+
+
+def test_list_citations_for_run_returns_rows(client, session, make_entity, make_run):
+    from provenance.models.citation import Citation
+    from provenance.models.query_probe import QueryProbe
+
+    entity = make_entity()
+    run = make_run(entity.id)
+    probe = QueryProbe(run_id=run.id, query_variant="direct", query_text="q")
+    session.add(probe)
+    session.flush()
+    session.add(
+        Citation(
+            entry_id=probe.id,
+            cited_url="https://acme.example.com/docs",
+            domain="acme.example.com",
+        )
+    )
+    session.commit()
+
+    response = client.get(f"/v1/runs/{run.id}/citations")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["cited_url"] == "https://acme.example.com/docs"
+    assert body[0]["entry_id"] == probe.id
+
+
+def test_list_demand_for_run_deserializes_json_fields(
+    client, make_entity, seed_completed_run
+):
+    entity = make_entity()
+    run = seed_completed_run(
+        entity.id,
+        [(1, "primary", "positive", [])],
+        related_queries=["acme guide", "acme pricing"],
+        geographic_distribution={"US": 90.0, "IN": 10.0},
+    )
+
+    response = client.get(f"/v1/runs/{run.id}/demand")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["related_queries"] == ["acme guide", "acme pricing"]
+    assert body[0]["geographic_distribution"] == {"US": 90.0, "IN": 10.0}
+
+
+def test_signal_endpoints_empty_run_returns_empty_list(client, make_entity, make_run):
+    entity = make_entity()
+    run = make_run(entity.id)
+
+    for path in ("probes", "signals", "citations", "demand"):
+        response = client.get(f"/v1/runs/{run.id}/{path}")
+        assert response.status_code == 200
+        assert response.json() == []
+
+
+def test_signal_endpoints_missing_run_returns_404(client):
+    for path in ("probes", "signals", "citations", "demand"):
+        response = client.get(f"/v1/runs/999999/{path}")
+        assert response.status_code == 404
+        assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# DataPoint read endpoint: GET /runs/{run_id}/datapoints
+# ---------------------------------------------------------------------------
+
+
+def test_list_datapoints_for_run_returns_rows(client, session, make_entity, make_run):
+    from provenance.models.data_point import DataPoint
+
+    entity = make_entity()
+    run = make_run(entity.id)
+    session.add(
+        DataPoint(
+            run_id=run.id,
+            signal_family="social",
+            signal_key="hn_story_count",
+            signal_value=3.0,
+            collector_name="social",
+        )
+    )
+    session.add(
+        DataPoint(
+            run_id=run.id,
+            signal_family="other",
+            signal_key="something_else",
+            signal_value=1.0,
+            collector_name="other",
+        )
+    )
+    session.commit()
+
+    response = client.get(f"/v1/runs/{run.id}/datapoints")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    assert all(dp["run_id"] == run.id for dp in body)
+    assert all(dp["entry_id"] is None for dp in body)
+
+
+def test_list_datapoints_for_run_filters_by_signal_family(client, session, make_entity, make_run):
+    from provenance.models.data_point import DataPoint
+
+    entity = make_entity()
+    run = make_run(entity.id)
+    session.add(
+        DataPoint(
+            run_id=run.id,
+            signal_family="social",
+            signal_key="hn_story_count",
+            signal_value=3.0,
+            collector_name="social",
+        )
+    )
+    session.add(
+        DataPoint(
+            run_id=run.id,
+            signal_family="other",
+            signal_key="something_else",
+            signal_value=1.0,
+            collector_name="other",
+        )
+    )
+    session.commit()
+
+    response = client.get(f"/v1/runs/{run.id}/datapoints", params={"signal_family": "social"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["signal_key"] == "hn_story_count"
+
+
+def test_list_datapoints_for_run_missing_run_returns_404(client):
+    response = client.get("/v1/runs/999999/datapoints")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# Action report endpoint: GET /runs/{run_id}/report
+# ---------------------------------------------------------------------------
+
+
+def test_get_action_report_returns_report_for_completed_run(
+    client, make_entity, seed_completed_run
+):
+    entity = make_entity(name="Acme")
+    run = seed_completed_run(
+        entity.id,
+        [(1, "primary", "positive", ["Beta"])],
+        search_volume=90.0,
+    )
+
+    response = client.get(f"/v1/runs/{run.id}/report")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == run.id
+    assert body["entity_id"] == entity.id
+    assert body["entity_name"] == "Acme"
+    assert "headline" in body
+    assert isinstance(body["levers"], list)
+    assert isinstance(body["competitor_pressure"], list)
+
+
+def test_get_action_report_missing_run_returns_404(client):
+    response = client.get("/v1/runs/999999/report")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"

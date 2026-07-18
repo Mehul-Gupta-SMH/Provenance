@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     pytrends_request_delay_seconds: float = 1.0
     pytrends_timeout: int = 30
 
+    # Hacker News (Algolia search API)
+    hn_timeout_seconds: int = 15
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"

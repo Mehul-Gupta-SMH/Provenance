@@ -1,5 +1,6 @@
+import json
 from datetime import datetime
-from typing import Optional
+from typing import Dict, List, Optional
 
 from sqlmodel import Field, SQLModel
 
@@ -19,3 +20,25 @@ class DemandSignal(SQLModel, table=True):
     related_queries_json: str = Field(default="[]")
     # JSON string ({region: score}); v1/SQLite intentional
     geographic_distribution_json: str = Field(default="{}")
+
+
+class DemandSignalRead(SQLModel):
+    id: int
+    run_id: int
+    collected_at: datetime
+    search_volume: Optional[float]
+    trend_velocity: Optional[float]
+    related_queries: List[str]
+    geographic_distribution: Dict[str, float]
+
+
+def demand_signal_to_read(signal: DemandSignal) -> DemandSignalRead:
+    return DemandSignalRead(
+        id=signal.id,
+        run_id=signal.run_id,
+        collected_at=signal.collected_at,
+        search_volume=signal.search_volume,
+        trend_velocity=signal.trend_velocity,
+        related_queries=json.loads(signal.related_queries_json),
+        geographic_distribution=json.loads(signal.geographic_distribution_json),
+    )
