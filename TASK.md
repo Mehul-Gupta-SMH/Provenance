@@ -17,3 +17,9 @@
 | 2026-07-16 | [x] | Phase 5 — Pipeline orchestration + background task | `provenance/core/pipeline.py`, runs route hook |
 | 2026-07-16 | [x] | Phase 6+7 — Divergence engine + analysis layer | `provenance/core/{divergence,analysis}.py`, `provenance/api/v1/routes/analysis.py`, fingerprint/divergence endpoints |
 | 2026-07-16 | [x] | Phase 8 — Tests (78), lint clean, README API reference | `tests/` (18 files), `README.md` |
+| 2026-07-18 | [x] | Raw signal-inspection endpoints (PLAN §12) | `provenance/services/signal_service.py`, `*Read` schemas on `query_probe`/`llm_signal`/`citation`/`demand_signal`, `GET /v1/runs/{id}/{probes,signals,citations,demand}` |
+| 2026-07-18 | [x] | Probe context sweep (contexts × variants) | `ProbeContextSpec` + `Run.probe_contexts_json`, migration `d80a8f4d890f`, pipeline fan-out |
+| 2026-07-18 | [x] | Experiment analytics layer | `provenance/core/experiment_analysis.py`, `GET /v1/experiments/{id}/{runs,comparison,drift}` |
+| 2026-07-18 | [x] | Social collector → DataPoint EAV (first drop-in signal family, no migration) | `provenance/collectors/social.py`, `DataPointRead`, `GET /v1/runs/{id}/datapoints` |
+| 2026-07-18 | [x] | Action report — actionability layer | `provenance/core/action_report.py`, `GET /v1/runs/{id}/report` |
+| 2026-07-18 | [x] | Live run+test (real uvicorn/HTTP), docs refresh | 121 tests green; `README.md`, `.env.example`, `TASK.md` updated; PR #7 |

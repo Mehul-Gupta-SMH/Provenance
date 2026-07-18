@@ -32,13 +32,25 @@ Provenance probes LLMs across query variants, extracts structured fingerprints f
 | Demand ahead of LLM | High search volume, LLM under-recommends | Highest opportunity |
 | Aligned | LLM echoes established consensus | Calibration anchor |
 
+### The signal loop
+
+The API is organized around a five-stage loop — each stage is a set of endpoints (see [API Reference](#api-reference)):
+
+| Stage | What it does | Where |
+|-------|--------------|-------|
+| **Observe** | Probe the LLM across query variants **× a matrix of probe contexts** (persona, expertise, locale, temperature). One run fans out into many observations. | `POST /v1/runs` with `probe_contexts` |
+| **Inspect** | Read the raw evidence behind a run — the actual model responses, extracted signals, citations, demand baseline, and EAV datapoints. | `GET /v1/runs/{id}/{probes,signals,citations,demand,datapoints}` |
+| **Explain** | Score the demand↔LLM divergence and assemble the entity's fingerprint from raw signals (all read-time). | `GET /v1/runs/{id}/divergence`, `GET /v1/entities/{id}/fingerprint` |
+| **Measure** | Group runs into an experiment and quantify whether an intervention moved the needle — snapshot deltas and per-entity drift over time. | `GET /v1/experiments/{id}/{comparison,drift}` |
+| **Act** | Turn the gap into a prioritized, evidence-grounded set of levers, plus competitor-delta and gap analysis. | `GET /v1/runs/{id}/report`, `POST /v1/analysis/{competitor-delta,gap}` |
+
 ---
 
 ## Three Use Modes
 
-- **Self-tracking** — Am I being recommended? At what rank? In what context? How is that drifting over time?
-- **Competitor benchmarking** — Why does the LLM prefer Competitor A? What signals do they have that I don't?
-- **Gap analysis** — A direct, prioritized content brief grounded in what the LLM actually cites.
+- **Self-tracking** — Am I being recommended? At what rank? In what context? How does that drift over time across an experiment?
+- **Competitor benchmarking** — Why does the LLM prefer Competitor A? Competitor-delta and gap analysis diff two entities' fingerprints field by field.
+- **Action reports** — `GET /v1/runs/{id}/report` synthesizes divergence + demand + social + citation signals into a headline gap and prioritized levers, each grounded in the actual observed numbers (no fabricated statistics), plus the competitors the model reached for instead.
 
 ---
 
@@ -52,12 +64,18 @@ Provenance probes LLMs across query variants, extracts structured fingerprints f
 | Migrations | Alembic |
 | LLM Probing | Anthropic Claude (v1), OpenAI + Gemini (stubbed) |
 | Demand Signals | pytrends (Google Trends) |
+| Social Signals | Hacker News (keyless Algolia API) → `DataPoint` EAV store |
+| Background work | FastAPI background tasks (v1), Celery/Redis (v2) |
 
 ---
 
 ## Architecture
 
-Provenance is API-first: all business logic lives in the FastAPI service under `/v1/`, and route handlers contain no logic — they delegate to `services/` and `core/`. LLM probes (`probes/`) and signal collectors (`collectors/`) are registered implementations of abstract base classes (`core/registry.py`), so adding a provider is a drop-in, not a refactor. The schema is flat with late derivation: raw probe data (`QueryProbe`, `LLMSignal`, `DemandSignal`, `Citation`) is never aggregated at write time — segmentation, persona-based analysis, and cross-dimensional queries are all read-time operations, computed by `core/divergence.py` and `core/analysis.py` and cached only where explicitly noted (`DivergenceScore`). Every data point anchors to one of three join keys in a strict hierarchy: `Experiment` (cross-run grouping) → `Run` (one pipeline execution for one entity) → `QueryProbe` (one atomic LLM call, identified by `entry_id`). Per-probe signal tables reference `entry_id`, per-run tables reference `run_id`, and per-entity tables (future) reference `entity_id`. All schema changes go through Alembic — no hand-edited tables — and the SQLite-backed v1 schema is designed to swap to Postgres with zero migration changes.
+Provenance is API-first: all business logic lives in the FastAPI service under `/v1/`, and route handlers contain no logic — they delegate to `services/` and `core/`. LLM probes (`probes/`) and signal collectors (`collectors/` — `demand`, `citation`, `social`) are registered implementations of abstract base classes (`core/registry.py`), so adding a provider or signal family is a drop-in, not a refactor. The schema is flat with late derivation: raw probe data (`QueryProbe`, `LLMSignal`, `DemandSignal`, `Citation`) is never aggregated at write time — segmentation, persona-based analysis, divergence scoring, experiment comparison, and action reports are all read-time operations, computed by `core/divergence.py`, `core/analysis.py`, `core/experiment_analysis.py`, and `core/action_report.py`, and cached only where explicitly noted (`DivergenceScore`).
+
+Every data point anchors to one of three join keys in a strict hierarchy: `Experiment` (cross-run grouping) → `Run` (one pipeline execution for one entity) → `QueryProbe` (one atomic LLM call, identified by `entry_id`). Per-probe signal tables reference `entry_id`, per-run tables reference `run_id`, and per-entity tables (future) reference `entity_id`. Signals that don't warrant a structured table are written to `DataPoint`, an ever-expanding EAV store keyed by `(signal_family, signal_key)` — a new collector (like `social`) starts writing immediately with **no migration**. Structured schema changes always go through Alembic — no hand-edited tables — and the SQLite-backed v1 schema is designed to swap to Postgres with zero migration changes.
+
+A single run fans out probes across the Cartesian product of **query variants × probe contexts**: the four query variants (`direct`, `comparative`, `expert`, `contrarian`) are each executed under every `ProbeContextSpec` supplied on the run, populating the flat per-probe context columns so any future segmentation (by persona, locale, temperature, …) is a read-time query, never a re-run.
 
 ---
 
@@ -65,15 +83,17 @@ Provenance is API-first: all business logic lives in the FastAPI service under `
 
 ```
 provenance/
-├── api/v1/routes/      # One file per resource
-├── core/               # Registry, pipeline orchestration, divergence engine
-├── models/             # SQLModel table definitions (flat, raw)
-├── collectors/         # Signal collectors (demand, citation)
-├── probes/             # LLM probe implementations
+├── api/v1/routes/      # One file per resource (entities, experiments, runs, analysis)
+├── core/               # registry, pipeline, divergence, analysis,
+│                       #   experiment_analysis, action_report
+├── models/             # SQLModel table definitions (flat, raw) + *Read schemas
+├── collectors/         # Signal collectors (demand, citation, social)
+├── probes/             # LLM probe implementations (anthropic; openai/gemini stubbed)
+├── services/           # Read/write service layer called by routes
 ├── migrations/         # Alembic migration scripts
-├── tests/
-├── main.py
-└── config.py
+├── tests/              # Mirrors source layout; runs fully offline
+├── main.py             # FastAPI app + probe/collector registration
+└── config.py           # pydantic-settings (env-driven)
 ```
 
 ---
@@ -99,10 +119,12 @@ pip install -r requirements.txt
 
 # 2. Configure environment
 cp .env.example .env
-# Fill in ANTHROPIC_API_KEY and other values (see .env.example for the full list:
-# ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, DATABASE_URL, APP_ENV, LOG_LEVEL)
+# Set ANTHROPIC_API_KEY to run functional probes. Every variable in
+# .env.example maps 1:1 to a field in provenance/config.py. Without a key the
+# API still runs — probes soft-fail and the run is marked "failed" (by design),
+# and the demand/social collectors degrade gracefully rather than raising.
 
-# 3. Run migrations
+# 3. Run migrations (creates the schema — Alembic owns it, not create_all)
 alembic upgrade head
 
 # 4. Start the API
@@ -181,9 +203,9 @@ All routes are versioned under `/v1/`. Error responses use a structured body: `{
 
 ## V1 Scope
 
-In scope: Entity CRUD · Run execution · Claude probing · Demand signals · Citation extraction · Divergence scoring · Competitor delta · Gap analysis · Full `/v1/` API
+In scope: Entity/Experiment CRUD · Run execution (background tasks) · Claude probing (context-sweep matrix) · Demand signals · Social signals (`DataPoint` EAV) · Citation extraction · Divergence scoring · Fingerprints · Competitor delta · Gap analysis · Experiment comparison + drift · Action reports · Raw signal inspection · Full `/v1/` API · SQLite + Alembic
 
-Out of scope: Frontend · Auth · Celery/Redis · Postgres · Deployment
+Out of scope: Frontend · Auth/multi-tenancy · Functional OpenAI/Gemini probes (registered as stubs) · Celery/Redis · Postgres · Deployment
 
 ---
 
