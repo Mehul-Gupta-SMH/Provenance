@@ -168,6 +168,7 @@ All routes are versioned under `/v1/`. Error responses use a structured body: `{
 | `GET` | `/v1/runs/{run_id}/citations` | — | `200` `List[CitationRead]`, or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/demand` | — | `200` `List[DemandSignalRead]` (`related_queries` / `geographic_distribution` deserialized), or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/datapoints` | Query: `signal_family?` | `200` `List[DataPointRead]` (EAV signal rows, e.g. `signal_family=social` HN mentions/points), or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/report` | — | `200` `ActionReport` (headline gap, prioritized levers grounded in the run's signals, competitor pressure, auditable `signals_considered`), or `404 RUN_NOT_FOUND` |
 
 ### Analysis (`/v1/analysis`)
 

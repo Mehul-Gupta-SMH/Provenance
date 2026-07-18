@@ -351,3 +351,37 @@ def test_list_datapoints_for_run_missing_run_returns_404(client):
 
     assert response.status_code == 404
     assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# Action report endpoint: GET /runs/{run_id}/report
+# ---------------------------------------------------------------------------
+
+
+def test_get_action_report_returns_report_for_completed_run(
+    client, make_entity, seed_completed_run
+):
+    entity = make_entity(name="Acme")
+    run = seed_completed_run(
+        entity.id,
+        [(1, "primary", "positive", ["Beta"])],
+        search_volume=90.0,
+    )
+
+    response = client.get(f"/v1/runs/{run.id}/report")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == run.id
+    assert body["entity_id"] == entity.id
+    assert body["entity_name"] == "Acme"
+    assert "headline" in body
+    assert isinstance(body["levers"], list)
+    assert isinstance(body["competitor_pressure"], list)
+
+
+def test_get_action_report_missing_run_returns_404(client):
+    response = client.get("/v1/runs/999999/report")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"

@@ -10,6 +10,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from provenance.config import Settings, get_settings
+from provenance.core.action_report import ActionReport, ActionReportBuilder
+from provenance.core.action_report import RunNotFoundError as ActionReportRunNotFoundError
 from provenance.core.divergence import DivergenceEngine
 from provenance.core.divergence import RunNotFoundError as DivergenceRunNotFoundError
 from provenance.models.citation import CitationRead
@@ -171,6 +173,17 @@ def list_datapoints(
     try:
         return signal_service.list_datapoints_for_run(run_id, session, signal_family=signal_family)
     except SignalRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+
+
+@router.get("/{run_id}/report", response_model=ActionReport)
+def get_action_report(run_id: int, session: Session = Depends(get_session)) -> ActionReport:
+    try:
+        return ActionReportBuilder(session).build(run_id)
+    except ActionReportRunNotFoundError as exc:
         raise HTTPException(
             status_code=404,
             detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
