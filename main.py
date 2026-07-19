@@ -14,6 +14,7 @@ async def lifespan(app: FastAPI):
 
 def _register_probes_and_collectors() -> None:
     from provenance.collectors.citation import CitationExtractor
+    from provenance.collectors.content import ContentCollector
     from provenance.collectors.demand import DemandCollector
     from provenance.collectors.social import SocialCollector
     from provenance.core.registry import CollectorRegistry, ProbeRegistry
@@ -27,6 +28,7 @@ def _register_probes_and_collectors() -> None:
     CollectorRegistry.register("demand", DemandCollector)
     CollectorRegistry.register("citation", CitationExtractor)
     CollectorRegistry.register("social", SocialCollector)
+    CollectorRegistry.register("content", ContentCollector)
 
 
 app = FastAPI(title="Provenance", version="1.0.0", lifespan=lifespan)

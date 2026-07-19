@@ -13,6 +13,7 @@ def test_create_entity_json_list_round_trip(session):
         category="graph database",
         competitors=["Rival", "Other"],
         query_seeds=["best graph db", "graph db comparison"],
+        aliases=["Acme Inc", "acme"],
     )
 
     read = entity_service.create_entity(entity_in, session)
@@ -20,6 +21,7 @@ def test_create_entity_json_list_round_trip(session):
     assert read.id is not None
     assert read.competitors == ["Rival", "Other"]
     assert read.query_seeds == ["best graph db", "graph db comparison"]
+    assert read.aliases == ["Acme Inc", "acme"]
 
 
 def test_get_and_list_entities(session):
@@ -57,6 +59,24 @@ def test_update_entity_round_trips_json_lists_and_bumps_updated_at(session):
     assert updated is not None
     assert updated.category == "vector database"
     assert updated.competitors_json == '["Rival", "NewCo"]'
+    assert updated.updated_at > original_updated_at
+
+
+def test_update_entity_round_trips_aliases_and_bumps_updated_at(session):
+    read = entity_service.create_entity(
+        EntityCreate(name="Neo4j", category="graph database"), session
+    )
+    original_updated_at = read.updated_at
+
+    time.sleep(0.001)  # ensure datetime.utcnow() strictly advances
+    updated = entity_service.update_entity(
+        read.id,
+        EntityUpdate(aliases=["neo4j", "Neo 4j"]),
+        session,
+    )
+
+    assert updated is not None
+    assert updated.aliases_json == '["neo4j", "Neo 4j"]'
     assert updated.updated_at > original_updated_at
 
 

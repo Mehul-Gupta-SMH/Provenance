@@ -12,6 +12,7 @@ class EntityBase(SQLModel):
     # Lists stored as JSON strings; service layer serializes/deserializes
     competitors_json: str = Field(default="[]")
     query_seeds_json: str = Field(default="[]")
+    aliases_json: str = Field(default="[]")
 
 
 class Entity(EntityBase, table=True):
@@ -27,6 +28,7 @@ class EntityCreate(SQLModel):
     url: Optional[str] = None
     competitors: List[str] = []
     query_seeds: List[str] = []
+    aliases: List[str] = []
 
 
 class EntityRead(SQLModel):
@@ -36,6 +38,7 @@ class EntityRead(SQLModel):
     url: Optional[str]
     competitors: List[str]
     query_seeds: List[str]
+    aliases: List[str]
     created_at: datetime
     updated_at: datetime
 
@@ -46,6 +49,7 @@ class EntityUpdate(SQLModel):
     url: Optional[str] = None
     competitors: Optional[List[str]] = None
     query_seeds: Optional[List[str]] = None
+    aliases: Optional[List[str]] = None
 
 
 def entity_to_read(entity: Entity) -> EntityRead:
@@ -56,6 +60,27 @@ def entity_to_read(entity: Entity) -> EntityRead:
         url=entity.url,
         competitors=json.loads(entity.competitors_json),
         query_seeds=json.loads(entity.query_seeds_json),
+        aliases=json.loads(entity.aliases_json),
         created_at=entity.created_at,
         updated_at=entity.updated_at,
     )
+
+
+def entity_name_variants(entity: Entity) -> set[str]:
+    """Lowercased {entity.name} ∪ aliases_json, for alias-aware name matching.
+
+    Tolerates empty/malformed aliases_json (falls back to just {name})."""
+    variants = {entity.name.strip().lower()}
+    try:
+        aliases = json.loads(entity.aliases_json)
+    except (TypeError, ValueError):
+        return variants
+    if not isinstance(aliases, list):
+        return variants
+    variants.update(alias.strip().lower() for alias in aliases if isinstance(alias, str))
+    return variants
+
+
+def matches_entity(candidate_name: str, entity: Entity) -> bool:
+    """True if candidate_name matches the entity's canonical name or any alias."""
+    return candidate_name.strip().lower() in entity_name_variants(entity)

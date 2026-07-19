@@ -12,6 +12,7 @@ from sqlmodel import select
 from provenance.core.action_report import ActionReportBuilder, RunNotFoundError
 from provenance.models.citation import Citation
 from provenance.models.data_point import DataPoint
+from provenance.models.entity import Entity
 from provenance.models.query_probe import QueryProbe
 
 
@@ -114,6 +115,29 @@ def test_competitor_pressure_aggregates_case_insensitively_and_excludes_self(
     by_name = {cp.name.lower(): cp.times_co_mentioned for cp in report.competitor_pressure}
     assert by_name == {"beta": 3, "gamma": 2}
     assert "acme" not in by_name
+
+
+def test_competitor_pressure_excludes_alias_co_mentions(session, seed_completed_run):
+    """A co-mentioned name that is an alias of the entity (not just the canonical
+    name) should be excluded from competitor_pressure, same as an exact self-mention."""
+    entity = Entity(name="Acme", category="graph database", aliases_json='["Acme Labs"]')
+    session.add(entity)
+    session.commit()
+    session.refresh(entity)
+
+    run = seed_completed_run(
+        entity.id,
+        [
+            (1, "primary", "positive", ["Beta", "Acme Labs"]),
+            (2, "alternative", "neutral", ["acme labs", "Beta"]),
+        ],
+    )
+
+    report = ActionReportBuilder(session).build(run.id)
+
+    by_name = {cp.name.lower(): cp.times_co_mentioned for cp in report.competitor_pressure}
+    assert by_name == {"beta": 2}
+    assert "acme labs" not in by_name
 
 
 def test_healthy_aligned_run_has_few_or_zero_levers(session, make_entity, seed_completed_run):

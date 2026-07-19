@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Hacker News (Algolia search API)
     hn_timeout_seconds: int = 15
 
+    # Content/citability collector (fetches the entity's own website)
+    content_fetch_timeout_seconds: int = 15
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"

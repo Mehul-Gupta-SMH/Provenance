@@ -11,6 +11,7 @@ import json
 import pytest
 from sqlmodel import select
 
+from provenance.collectors.content import ContentCollector
 from provenance.collectors.demand import DemandCollector
 from provenance.collectors.social import SocialCollector
 from provenance.core.pipeline import RunPipeline
@@ -33,6 +34,7 @@ def _register_real_classes():
     ProbeRegistry.register("anthropic", AnthropicProbe)
     CollectorRegistry.register("demand", DemandCollector)
     CollectorRegistry.register("social", SocialCollector)
+    CollectorRegistry.register("content", ContentCollector)
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +43,14 @@ def _stub_social_collector(monkeypatch):
     that don't care about social signals stay network-free. Tests exercising
     social behavior override this with their own monkeypatch."""
     monkeypatch.setattr(SocialCollector, "collect", lambda self, entity_name: [])
+
+
+@pytest.fixture(autouse=True)
+def _stub_content_collector(monkeypatch):
+    """Default content collector stub (no rows) so pre-existing pipeline tests
+    that don't care about content signals stay network-free. Tests exercising
+    content behavior override this with their own monkeypatch."""
+    monkeypatch.setattr(ContentCollector, "collect", lambda self, entity_url: [])
 
 
 async def test_pipeline_completed_run_writes_expected_rows(
@@ -455,4 +465,143 @@ async def test_pipeline_social_collector_raising_still_completes(
     assert run.status == RunStatus.completed
 
     data_points = session.exec(select(DataPoint).where(DataPoint.run_id == run.id)).all()
+    assert data_points == []
+
+
+# ---------------------------------------------------------------------------
+# Content signal collection -> DataPoint rows
+# ---------------------------------------------------------------------------
+
+
+async def test_pipeline_writes_content_datapoints(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    from provenance.collectors.content import ContentSignalResult
+
+    entity = make_entity(name="Acme", category="graph database")
+    entity.url = "https://acme.example.com/"
+    session.add(entity)
+    session.commit()
+    run = make_run(entity.id)
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_demand_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    def fake_content_collect(self, entity_url):
+        return [
+            ContentSignalResult(signal_key="word_count", signal_value=500.0),
+            ContentSignalResult(signal_key="has_h1", signal_value=1.0),
+            ContentSignalResult(
+                signal_key="title_text", signal_value=0.0, signal_text="Acme Docs"
+            ),
+        ]
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_demand_collect)
+    monkeypatch.setattr(ContentCollector, "collect", fake_content_collect)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    data_points = session.exec(
+        select(DataPoint).where(DataPoint.run_id == run.id, DataPoint.signal_family == "content")
+    ).all()
+    assert len(data_points) == 3
+    for dp in data_points:
+        assert dp.run_id == run.id
+        assert dp.entry_id is None
+        assert dp.signal_family == "content"
+        assert dp.collector_name == "content"
+    by_key = {dp.signal_key: dp for dp in data_points}
+    assert by_key["word_count"].signal_value == 500.0
+    assert by_key["title_text"].signal_text == "Acme Docs"
+
+
+async def test_pipeline_no_entity_url_skips_content_collection(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    entity = make_entity(name="Acme", category="graph database")
+    assert entity.url is None
+    run = make_run(entity.id)
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_demand_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    def fake_content_collect_should_not_be_called(self, entity_url):
+        raise AssertionError("ContentCollector.collect must not be called without entity.url")
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_demand_collect)
+    monkeypatch.setattr(ContentCollector, "collect", fake_content_collect_should_not_be_called)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    data_points = session.exec(
+        select(DataPoint).where(DataPoint.run_id == run.id, DataPoint.signal_family == "content")
+    ).all()
+    assert data_points == []
+
+
+async def test_pipeline_content_collector_raising_still_completes(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    entity = make_entity(name="Acme", category="graph database")
+    entity.url = "https://acme.example.com/"
+    session.add(entity)
+    session.commit()
+    run = make_run(entity.id)
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_demand_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    def fake_content_collect_raises(self, entity_url):
+        raise RuntimeError("registry blew up")
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_demand_collect)
+    monkeypatch.setattr(ContentCollector, "collect", fake_content_collect_raises)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    data_points = session.exec(
+        select(DataPoint).where(DataPoint.run_id == run.id, DataPoint.signal_family == "content")
+    ).all()
     assert data_points == []

@@ -10,6 +10,7 @@ def test_create_entity_returns_201(client):
             "category": "graph database",
             "competitors": ["Rival"],
             "query_seeds": ["best graph db"],
+            "aliases": ["Acme Inc"],
         },
     )
 
@@ -18,6 +19,7 @@ def test_create_entity_returns_201(client):
     assert body["name"] == "Acme"
     assert body["competitors"] == ["Rival"]
     assert body["query_seeds"] == ["best graph db"]
+    assert body["aliases"] == ["Acme Inc"]
     assert "id" in body
 
 
@@ -47,6 +49,17 @@ def test_update_entity_round_trip(client, make_entity):
 
     assert response.status_code == 200
     assert response.json()["category"] == "vector database"
+
+
+def test_update_entity_round_trips_aliases(client, make_entity):
+    entity = make_entity(name="Neo4j")
+
+    response = client.patch(
+        f"/v1/entities/{entity.id}", json={"aliases": ["neo4j", "Neo 4j"]}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["aliases"] == ["neo4j", "Neo 4j"]
 
 
 def test_update_entity_missing_returns_404(client):

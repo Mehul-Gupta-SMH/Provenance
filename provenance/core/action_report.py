@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from provenance.models.divergence_score import DivergenceScore
-from provenance.models.entity import Entity
+from provenance.models.entity import Entity, matches_entity
 from provenance.models.run import Run
 from provenance.services import signal_service
 from provenance.services.signal_service import RunNotFoundError
@@ -136,9 +136,7 @@ class ActionReportBuilder:
         )
         levers.sort(key=lambda lever: lever.priority_score, reverse=True)
 
-        competitor_pressure = self._build_competitor_pressure(
-            signals, entity.name if entity else ""
-        )
+        competitor_pressure = self._build_competitor_pressure(signals, entity)
 
         headline = self._headline(divergence_direction, alignment_score)
         summary = self._summary(headline, levers)
@@ -258,15 +256,14 @@ class ActionReportBuilder:
         return levers
 
     def _build_competitor_pressure(
-        self, signals, entity_name: str
+        self, signals, entity: Optional[Entity]
     ) -> List[CompetitorPressure]:
-        own_name_lower = entity_name.strip().lower()
         counts: Dict[str, int] = {}
         display_names: Dict[str, str] = {}
         for signal in signals:
             for co_name in signal.co_mentioned_entities:
                 key = co_name.strip().lower()
-                if not key or key == own_name_lower:
+                if not key or (entity is not None and matches_entity(co_name, entity)):
                     continue
                 counts[key] = counts.get(key, 0) + 1
                 display_names.setdefault(key, co_name)

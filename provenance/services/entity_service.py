@@ -16,6 +16,7 @@ def create_entity(entity_in: EntityCreate, session: Session) -> EntityRead:
         url=entity_in.url,
         competitors_json=json.dumps(entity_in.competitors),
         query_seeds_json=json.dumps(entity_in.query_seeds),
+        aliases_json=json.dumps(entity_in.aliases),
     )
     session.add(entity)
     session.commit()
@@ -49,6 +50,8 @@ def update_entity(entity_id: int, entity_in: EntityUpdate, session: Session) -> 
         entity.competitors_json = json.dumps(update_data["competitors"])
     if "query_seeds" in update_data and update_data["query_seeds"] is not None:
         entity.query_seeds_json = json.dumps(update_data["query_seeds"])
+    if "aliases" in update_data and update_data["aliases"] is not None:
+        entity.aliases_json = json.dumps(update_data["aliases"])
 
     entity.updated_at = datetime.utcnow()
 

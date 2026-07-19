@@ -34,7 +34,7 @@ from provenance.core.registry import CollectorRegistry, ProbeRegistry
 from provenance.models.citation import Citation
 from provenance.models.data_point import DataPoint
 from provenance.models.demand_signal import DemandSignal
-from provenance.models.entity import Entity
+from provenance.models.entity import Entity, matches_entity
 from provenance.models.llm_signal import LLMSignal
 from provenance.models.query_probe import QueryProbe
 from provenance.models.run import ProbeContextSpec, Run, RunStatus
@@ -92,6 +92,13 @@ class RunPipeline:
                 # Social signals are best-effort DataPoint rows — a failure here
                 # must never fail an otherwise-healthy run.
                 logger.exception("Social signal collection failed for run %s", run_id)
+
+            try:
+                await self._collect_content_signals(entity, run)
+            except Exception:
+                # Content signals are best-effort DataPoint rows — a failure here
+                # must never fail an otherwise-healthy run.
+                logger.exception("Content signal collection failed for run %s", run_id)
 
             total_probes = 0
             failed_probes = 0
@@ -171,6 +178,37 @@ class RunPipeline:
         self.session.commit()
 
     # ------------------------------------------------------------------
+    # Content signal (once per run, own entity only) — writes to DataPoint
+    # ------------------------------------------------------------------
+
+    async def _collect_content_signals(self, entity: Entity, run: Run) -> None:
+        if not entity.url:
+            return
+
+        collector_cls = CollectorRegistry.get("content")
+        collector = collector_cls(self.settings)
+        # ContentCollector is sync (requests) — run off the event loop.
+        results = await asyncio.to_thread(collector.collect, entity.url)
+
+        for result in results:
+            if result.error:
+                logger.warning(
+                    "Content signal collection error for run %s: %s", run.id, result.error
+                )
+                continue
+            self.session.add(
+                DataPoint(
+                    run_id=run.id,
+                    signal_family="content",
+                    signal_key=result.signal_key,
+                    signal_value=result.signal_value,
+                    signal_text=result.signal_text,
+                    collector_name="content",
+                )
+            )
+        self.session.commit()
+
+    # ------------------------------------------------------------------
     # LLM probes (per variant, per provider)
     # ------------------------------------------------------------------
 
@@ -234,11 +272,11 @@ class RunPipeline:
 
                 # One LLMSignal row per probe, describing the run's own entity only.
                 # Competitors are folded into co_mentioned_entities_json (delta #2).
-                own_entity = self._find_own_entity(result.extracted_entities, entity.name)
+                own_entity = self._find_own_entity(result.extracted_entities, entity)
                 co_mentioned = [
                     e.name
                     for e in result.extracted_entities
-                    if e.name.lower() != entity.name.lower()
+                    if not matches_entity(e.name, entity)
                 ]
                 signal = LLMSignal(
                     entry_id=qp.id,
@@ -290,15 +328,16 @@ class RunPipeline:
         return ProbeContext(**kwargs)
 
     def _find_own_entity(
-        self, extracted_entities: List[ExtractedEntity], entity_name: str
+        self, extracted_entities: List[ExtractedEntity], entity: Entity
     ) -> Optional[ExtractedEntity]:
         """
-        Locate the run's own entity among the extraction results (case-insensitive
-        name match). None means the LLM did not mention the entity at all, in which
-        case the LLMSignal row records mention_type="absent".
+        Locate the run's own entity among the extraction results (alias-aware,
+        case-insensitive name match). None means the LLM did not mention the
+        entity under any known name, in which case the LLMSignal row records
+        mention_type="absent".
         """
         for e in extracted_entities:
-            if e.name.lower() == entity_name.lower():
+            if matches_entity(e.name, entity):
                 return e
         return None
 
