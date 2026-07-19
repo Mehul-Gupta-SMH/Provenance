@@ -65,6 +65,7 @@ The API is organized around a five-stage loop — each stage is a set of endpoin
 | LLM Probing | Anthropic Claude (v1), OpenAI + Gemini (stubbed) |
 | Demand Signals | pytrends (Google Trends) |
 | Social Signals | Hacker News (keyless Algolia API) → `DataPoint` EAV store |
+| Content Signals | Own-site citability audit (statistics, headings, JSON-LD schema) → `DataPoint` |
 | Background work | FastAPI background tasks (v1), Celery/Redis (v2) |
 
 ---
@@ -158,7 +159,7 @@ All routes are versioned under `/v1/`. Error responses use a structured body: `{
 
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
-| `POST` | `/v1/entities` | `EntityCreate`: `name`, `category`, `url?`, `competitors[]`, `query_seeds[]` | `201` `EntityRead` |
+| `POST` | `/v1/entities` | `EntityCreate`: `name`, `category`, `url?`, `competitors[]`, `query_seeds[]`, `aliases[]` (alternate names — matched case-insensitively when detecting mentions) | `201` `EntityRead` |
 | `GET` | `/v1/entities` | Query: `skip` (≥0, default 0), `limit` (1-1000, default 100) | `200` `List[EntityRead]` |
 | `GET` | `/v1/entities/{entity_id}` | — | `200` `EntityRead`, or `404 ENTITY_NOT_FOUND` |
 | `PATCH` | `/v1/entities/{entity_id}` | `EntityUpdate`: any subset of `name`, `category`, `url`, `competitors`, `query_seeds` | `200` `EntityRead`, or `404 ENTITY_NOT_FOUND` |
@@ -175,6 +176,7 @@ All routes are versioned under `/v1/`. Error responses use a structured body: `{
 | `GET` | `/v1/experiments/{experiment_id}/runs` | — | `200` `List[RunRead]`, or `404 EXPERIMENT_NOT_FOUND` |
 | `GET` | `/v1/experiments/{experiment_id}/comparison` | — | `200` `ExperimentComparison` (per-run divergence snapshots + first→last metric deltas), or `404 EXPERIMENT_NOT_FOUND` |
 | `GET` | `/v1/experiments/{experiment_id}/drift` | — | `200` `ExperimentDrift` (per-entity time series of alignment/rank/stability), or `404 EXPERIMENT_NOT_FOUND` |
+| `GET` | `/v1/experiments/{experiment_id}/citation-analytics` | — | `200` `CitationAnalytics` (top cited domains across the experiment's runs, with per-domain content-type breakdown), or `404 EXPERIMENT_NOT_FOUND` |
 
 ### Runs (`/v1/runs`)
 
@@ -189,7 +191,8 @@ All routes are versioned under `/v1/`. Error responses use a structured body: `{
 | `GET` | `/v1/runs/{run_id}/signals` | — | `200` `List[LLMSignalRead]` (extracted recommendation signals; `co_mentioned_entities` deserialized), or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/citations` | — | `200` `List[CitationRead]`, or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/demand` | — | `200` `List[DemandSignalRead]` (`related_queries` / `geographic_distribution` deserialized), or `404 RUN_NOT_FOUND` |
-| `GET` | `/v1/runs/{run_id}/datapoints` | Query: `signal_family?` | `200` `List[DataPointRead]` (EAV signal rows, e.g. `signal_family=social` HN mentions/points), or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/datapoints` | Query: `signal_family?` | `200` `List[DataPointRead]` (EAV signal rows, e.g. `signal_family=social` HN mentions/points, or `signal_family=content` own-site citability signals), or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/citation-analytics` | — | `200` `CitationAnalytics` (top cited domains for the run + per-domain content-type distribution), or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/report` | — | `200` `ActionReport` (headline gap, prioritized levers grounded in the run's signals, competitor pressure, auditable `signals_considered`), or `404 RUN_NOT_FOUND` |
 
 ### Analysis (`/v1/analysis`)

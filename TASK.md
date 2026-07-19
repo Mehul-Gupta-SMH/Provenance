@@ -23,3 +23,7 @@
 | 2026-07-18 | [x] | Social collector → DataPoint EAV (first drop-in signal family, no migration) | `provenance/collectors/social.py`, `DataPointRead`, `GET /v1/runs/{id}/datapoints` |
 | 2026-07-18 | [x] | Action report — actionability layer | `provenance/core/action_report.py`, `GET /v1/runs/{id}/report` |
 | 2026-07-18 | [x] | Live run+test (real uvicorn/HTTP), docs refresh | 121 tests green; `README.md`, `.env.example`, `TASK.md` updated; PR #7 |
+| 2026-07-19 | [x] | GEO-tool feature research (5 agents in tandem) | scratchpad `research_geo_optimizer.md`, `research_gego_academic.md` |
+| 2026-07-19 | [x] | Citation-domain analytics (read-time) | `provenance/core/citation_analytics.py`, run + experiment endpoints |
+| 2026-07-19 | [x] | Content/citability collector → DataPoint EAV | `provenance/collectors/content.py`, pipeline hook |
+| 2026-07-19 | [x] | Entity aliases (canonical + aliases) | `Entity.aliases_json` (migration `b2e8eb17bc8f`), `matches_entity()` wired into pipeline + action report |
