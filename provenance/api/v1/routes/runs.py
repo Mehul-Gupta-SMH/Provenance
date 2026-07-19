@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from provenance.config import Settings, get_settings
 from provenance.core.action_report import ActionReport, ActionReportBuilder
 from provenance.core.action_report import RunNotFoundError as ActionReportRunNotFoundError
+from provenance.core.citation_analytics import CitationAnalytics, CitationAnalyticsEngine
 from provenance.core.divergence import DivergenceEngine
 from provenance.core.divergence import RunNotFoundError as DivergenceRunNotFoundError
 from provenance.models.citation import CitationRead
@@ -146,6 +147,19 @@ def list_signals(run_id: int, session: Session = Depends(get_session)) -> List[L
 def list_citations(run_id: int, session: Session = Depends(get_session)) -> List[CitationRead]:
     try:
         return signal_service.list_citations_for_run(run_id, session)
+    except SignalRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+
+
+@router.get("/{run_id}/citation-analytics", response_model=CitationAnalytics)
+def get_citation_analytics(
+    run_id: int, session: Session = Depends(get_session)
+) -> CitationAnalytics:
+    try:
+        return CitationAnalyticsEngine(session).for_run(run_id)
     except SignalRunNotFoundError as exc:
         raise HTTPException(
             status_code=404,

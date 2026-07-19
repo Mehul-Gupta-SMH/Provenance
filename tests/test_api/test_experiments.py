@@ -104,3 +104,71 @@ def test_empty_experiment_returns_empty_payloads(client):
     assert comparison_resp.json()["deltas"] == []
     assert drift_resp.status_code == 200
     assert drift_resp.json()["series"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Citation-domain analytics endpoint: GET /experiments/{id}/citation-analytics
+# ---------------------------------------------------------------------------
+
+
+def test_get_experiment_citation_analytics_unions_runs(
+    client, session, make_entity, make_run
+):
+    from provenance.models.citation import Citation
+    from provenance.models.query_probe import QueryProbe
+
+    entity = make_entity()
+    experiment = client.post("/v1/experiments", json={"name": "exp-citation-analytics"}).json()
+    run_a = make_run(entity.id)
+    run_b = make_run(entity.id)
+    _attach_to_experiment(session, run_a, experiment["id"])
+    _attach_to_experiment(session, run_b, experiment["id"])
+
+    for run, domain, content_type in [
+        (run_a, "acme.example.com", "docs"),
+        (run_b, "acme.example.com", "blog"),
+        (run_b, "other.example.com", "forum"),
+    ]:
+        probe = QueryProbe(run_id=run.id, query_variant="direct", query_text="q")
+        session.add(probe)
+        session.flush()
+        session.add(
+            Citation(
+                entry_id=probe.id,
+                cited_url=f"https://{domain}/x",
+                domain=domain,
+                content_type=content_type,
+            )
+        )
+    session.commit()
+
+    response = client.get(f"/v1/experiments/{experiment['id']}/citation-analytics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scope"] == "experiment"
+    assert body["scope_id"] == experiment["id"]
+    assert body["total_citations"] == 3
+    assert body["unique_domains"] == 2
+    top = {d["domain"]: d for d in body["top_domains"]}
+    assert top["acme.example.com"]["citation_count"] == 2
+    assert top["acme.example.com"]["content_type_distribution"] == {"docs": 1, "blog": 1}
+
+
+def test_get_experiment_citation_analytics_missing_experiment_returns_404(client):
+    response = client.get("/v1/experiments/999999/citation-analytics")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "EXPERIMENT_NOT_FOUND"
+
+
+def test_get_experiment_citation_analytics_empty_experiment_returns_zeros(client):
+    experiment = client.post("/v1/experiments", json={"name": "exp-citation-empty"}).json()
+
+    response = client.get(f"/v1/experiments/{experiment['id']}/citation-analytics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_citations"] == 0
+    assert body["unique_domains"] == 0
+    assert body["top_domains"] == []

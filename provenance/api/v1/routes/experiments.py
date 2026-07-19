@@ -7,6 +7,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
+from provenance.core.citation_analytics import CitationAnalytics, CitationAnalyticsEngine
 from provenance.core.experiment_analysis import (
     ExperimentAnalyzer,
     ExperimentComparison,
@@ -88,5 +89,15 @@ def get_experiment_drift(
 ) -> ExperimentDrift:
     try:
         return ExperimentAnalyzer(session).drift(experiment_id)
+    except ExperimentNotFoundError as exc:
+        raise _not_found(experiment_id) from exc
+
+
+@router.get("/{experiment_id}/citation-analytics", response_model=CitationAnalytics)
+def get_experiment_citation_analytics(
+    experiment_id: int, session: Session = Depends(get_session)
+) -> CitationAnalytics:
+    try:
+        return CitationAnalyticsEngine(session).for_experiment(experiment_id)
     except ExperimentNotFoundError as exc:
         raise _not_found(experiment_id) from exc

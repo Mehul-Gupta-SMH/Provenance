@@ -275,6 +275,69 @@ def test_signal_endpoints_missing_run_returns_404(client):
 
 
 # ---------------------------------------------------------------------------
+# Citation-domain analytics endpoint: GET /runs/{run_id}/citation-analytics
+# ---------------------------------------------------------------------------
+
+
+def test_get_citation_analytics_aggregates_by_domain(client, session, make_entity, make_run):
+    from provenance.models.citation import Citation
+    from provenance.models.query_probe import QueryProbe
+
+    entity = make_entity()
+    run = make_run(entity.id)
+    for domain, content_type in [
+        ("acme.example.com", "docs"),
+        ("acme.example.com", "blog"),
+        ("other.example.com", None),
+    ]:
+        probe = QueryProbe(run_id=run.id, query_variant="direct", query_text="q")
+        session.add(probe)
+        session.flush()
+        session.add(
+            Citation(
+                entry_id=probe.id,
+                cited_url=f"https://{domain}/x",
+                domain=domain,
+                content_type=content_type,
+            )
+        )
+    session.commit()
+
+    response = client.get(f"/v1/runs/{run.id}/citation-analytics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scope"] == "run"
+    assert body["scope_id"] == run.id
+    assert body["total_citations"] == 3
+    assert body["unique_domains"] == 2
+    top = {d["domain"]: d for d in body["top_domains"]}
+    assert top["acme.example.com"]["citation_count"] == 2
+    assert top["acme.example.com"]["content_type_distribution"] == {"docs": 1, "blog": 1}
+    assert top["other.example.com"]["content_type_distribution"] == {"unknown": 1}
+
+
+def test_get_citation_analytics_empty_run_returns_zeros(client, make_entity, make_run):
+    entity = make_entity()
+    run = make_run(entity.id)
+
+    response = client.get(f"/v1/runs/{run.id}/citation-analytics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_citations"] == 0
+    assert body["unique_domains"] == 0
+    assert body["top_domains"] == []
+
+
+def test_get_citation_analytics_missing_run_returns_404(client):
+    response = client.get("/v1/runs/999999/citation-analytics")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
 # DataPoint read endpoint: GET /runs/{run_id}/datapoints
 # ---------------------------------------------------------------------------
 
