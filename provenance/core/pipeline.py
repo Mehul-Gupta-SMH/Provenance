@@ -100,6 +100,13 @@ class RunPipeline:
                 # must never fail an otherwise-healthy run.
                 logger.exception("Content signal collection failed for run %s", run_id)
 
+            try:
+                await self._collect_discoverability_signals(entity, run)
+            except Exception:
+                # Discoverability signals are best-effort DataPoint rows — a failure
+                # here must never fail an otherwise-healthy run.
+                logger.exception("Discoverability signal collection failed for run %s", run_id)
+
             total_probes = 0
             failed_probes = 0
             for provider_name in _PROVIDERS:
@@ -204,6 +211,39 @@ class RunPipeline:
                     signal_value=result.signal_value,
                     signal_text=result.signal_text,
                     collector_name="content",
+                )
+            )
+        self.session.commit()
+
+    # ------------------------------------------------------------------
+    # Discoverability signal (once per run, own entity only) — writes to DataPoint
+    # ------------------------------------------------------------------
+
+    async def _collect_discoverability_signals(self, entity: Entity, run: Run) -> None:
+        if not entity.url:
+            return
+
+        collector_cls = CollectorRegistry.get("discoverability")
+        collector = collector_cls(self.settings)
+        # DiscoverabilityCollector is sync (requests) — run off the event loop.
+        results = await asyncio.to_thread(collector.collect, entity.url)
+
+        for result in results:
+            if result.error:
+                logger.warning(
+                    "Discoverability signal collection error for run %s: %s",
+                    run.id,
+                    result.error,
+                )
+                continue
+            self.session.add(
+                DataPoint(
+                    run_id=run.id,
+                    signal_family="discoverability",
+                    signal_key=result.signal_key,
+                    signal_value=result.signal_value,
+                    signal_text=result.signal_text,
+                    collector_name="discoverability",
                 )
             )
         self.session.commit()

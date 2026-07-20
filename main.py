@@ -16,6 +16,7 @@ def _register_probes_and_collectors() -> None:
     from provenance.collectors.citation import CitationExtractor
     from provenance.collectors.content import ContentCollector
     from provenance.collectors.demand import DemandCollector
+    from provenance.collectors.discoverability import DiscoverabilityCollector
     from provenance.collectors.social import SocialCollector
     from provenance.core.registry import CollectorRegistry, ProbeRegistry
     from provenance.probes.anthropic import AnthropicProbe
@@ -29,6 +30,7 @@ def _register_probes_and_collectors() -> None:
     CollectorRegistry.register("citation", CitationExtractor)
     CollectorRegistry.register("social", SocialCollector)
     CollectorRegistry.register("content", ContentCollector)
+    CollectorRegistry.register("discoverability", DiscoverabilityCollector)
 
 
 app = FastAPI(title="Provenance", version="1.0.0", lifespan=lifespan)

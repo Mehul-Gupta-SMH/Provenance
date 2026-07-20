@@ -13,6 +13,7 @@ from sqlmodel import select
 
 from provenance.collectors.content import ContentCollector
 from provenance.collectors.demand import DemandCollector
+from provenance.collectors.discoverability import DiscoverabilityCollector
 from provenance.collectors.social import SocialCollector
 from provenance.core.pipeline import RunPipeline
 from provenance.core.registry import CollectorRegistry, ProbeRegistry
@@ -35,6 +36,7 @@ def _register_real_classes():
     CollectorRegistry.register("demand", DemandCollector)
     CollectorRegistry.register("social", SocialCollector)
     CollectorRegistry.register("content", ContentCollector)
+    CollectorRegistry.register("discoverability", DiscoverabilityCollector)
 
 
 @pytest.fixture(autouse=True)
@@ -51,6 +53,14 @@ def _stub_content_collector(monkeypatch):
     that don't care about content signals stay network-free. Tests exercising
     content behavior override this with their own monkeypatch."""
     monkeypatch.setattr(ContentCollector, "collect", lambda self, entity_url: [])
+
+
+@pytest.fixture(autouse=True)
+def _stub_discoverability_collector(monkeypatch):
+    """Default discoverability collector stub (no rows) so pre-existing pipeline
+    tests that don't care about discoverability signals stay network-free. Tests
+    exercising discoverability behavior override this with their own monkeypatch."""
+    monkeypatch.setattr(DiscoverabilityCollector, "collect", lambda self, entity_url: [])
 
 
 async def test_pipeline_completed_run_writes_expected_rows(
@@ -603,5 +613,157 @@ async def test_pipeline_content_collector_raising_still_completes(
 
     data_points = session.exec(
         select(DataPoint).where(DataPoint.run_id == run.id, DataPoint.signal_family == "content")
+    ).all()
+    assert data_points == []
+
+
+# ---------------------------------------------------------------------------
+# Discoverability signal collection -> DataPoint rows
+# ---------------------------------------------------------------------------
+
+
+async def test_pipeline_writes_discoverability_datapoints(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    from provenance.collectors.discoverability import DiscoverabilitySignalResult
+
+    entity = make_entity(name="Acme", category="graph database")
+    entity.url = "https://acme.example.com/"
+    session.add(entity)
+    session.commit()
+    run = make_run(entity.id)
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_demand_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    def fake_discoverability_collect(self, entity_url):
+        return [
+            DiscoverabilitySignalResult(signal_key="robots_txt_present", signal_value=1.0),
+            DiscoverabilitySignalResult(
+                signal_key="robots_citation_bots_allowed", signal_value=0.75
+            ),
+            DiscoverabilitySignalResult(signal_key="llms_txt_present", signal_value=1.0),
+            DiscoverabilitySignalResult(
+                signal_key="schema_types_present", signal_value=0.0, signal_text="Organization"
+            ),
+        ]
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_demand_collect)
+    monkeypatch.setattr(DiscoverabilityCollector, "collect", fake_discoverability_collect)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    data_points = session.exec(
+        select(DataPoint).where(
+            DataPoint.run_id == run.id, DataPoint.signal_family == "discoverability"
+        )
+    ).all()
+    assert len(data_points) == 4
+    for dp in data_points:
+        assert dp.run_id == run.id
+        assert dp.entry_id is None
+        assert dp.signal_family == "discoverability"
+        assert dp.collector_name == "discoverability"
+    by_key = {dp.signal_key: dp for dp in data_points}
+    assert by_key["robots_citation_bots_allowed"].signal_value == 0.75
+    assert by_key["schema_types_present"].signal_text == "Organization"
+
+
+async def test_pipeline_no_entity_url_skips_discoverability_collection(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    entity = make_entity(name="Acme", category="graph database")
+    assert entity.url is None
+    run = make_run(entity.id)
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_demand_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    def fake_discoverability_collect_should_not_be_called(self, entity_url):
+        raise AssertionError(
+            "DiscoverabilityCollector.collect must not be called without entity.url"
+        )
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_demand_collect)
+    monkeypatch.setattr(
+        DiscoverabilityCollector, "collect", fake_discoverability_collect_should_not_be_called
+    )
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    data_points = session.exec(
+        select(DataPoint).where(
+            DataPoint.run_id == run.id, DataPoint.signal_family == "discoverability"
+        )
+    ).all()
+    assert data_points == []
+
+
+async def test_pipeline_discoverability_collector_raising_still_completes(
+    session, test_settings, monkeypatch, make_entity, make_run, make_probe_result,
+    make_demand_result, make_extracted_entity,
+):
+    entity = make_entity(name="Acme", category="graph database")
+    entity.url = "https://acme.example.com/"
+    session.add(entity)
+    session.commit()
+    run = make_run(entity.id)
+    own = make_extracted_entity(name="Acme", recommendation_rank=1, mention_type="primary")
+
+    async def fake_probe(self, query, query_variant, entity_name, context, competitors=None):
+        return make_probe_result(
+            query_variant=query_variant,
+            raw_response=f"{entity_name} is great.",
+            extracted_entities=[own],
+        )
+
+    def fake_demand_collect(self, entity_name, category):
+        return make_demand_result(entity_name=entity_name)
+
+    def fake_discoverability_collect_raises(self, entity_url):
+        raise RuntimeError("registry blew up")
+
+    monkeypatch.setattr(AnthropicProbe, "probe", fake_probe)
+    monkeypatch.setattr(DemandCollector, "collect", fake_demand_collect)
+    monkeypatch.setattr(DiscoverabilityCollector, "collect", fake_discoverability_collect_raises)
+
+    pipeline = RunPipeline(settings=test_settings, session=session)
+    await pipeline.execute(run.id)
+
+    session.refresh(run)
+    assert run.status == RunStatus.completed
+
+    data_points = session.exec(
+        select(DataPoint).where(
+            DataPoint.run_id == run.id, DataPoint.signal_family == "discoverability"
+        )
     ).all()
     assert data_points == []

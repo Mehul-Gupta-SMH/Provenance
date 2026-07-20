@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Content/citability collector (fetches the entity's own website)
     content_fetch_timeout_seconds: int = 15
 
+    # Discoverability collector (robots.txt, llms.txt, JSON-LD, .well-known)
+    discoverability_timeout_seconds: int = 15
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"
