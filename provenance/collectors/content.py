@@ -27,6 +27,9 @@ _TEXT_SKIP_TAGS = {"script", "style", "noscript"}
 _LIST_TAGS = {"ul", "ol"}
 _STAT_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?%?")
 _JSONLD_TYPES = {"faq": "FAQPage", "article": "Article", "organization": "Organization"}
+# Matches a pair of straight double-quotes or curly ("..."/“...”) quotes
+# wrapping at least one character, i.e. one inline quotation each.
+_QUOTE_PAIR_RE = re.compile(r'"[^"]+"|“[^”]+”')
 
 
 class _ContentHTMLParser(HTMLParser):
@@ -41,6 +44,7 @@ class _ContentHTMLParser(HTMLParser):
         self.h1_count = 0
         self.list_count = 0
         self.table_count = 0
+        self.blockquote_count = 0
         self.link_hrefs: List[str] = []
         self._skip_depth = 0
         self._in_title = False
@@ -63,6 +67,8 @@ class _ContentHTMLParser(HTMLParser):
             self.list_count += 1
         elif tag == "table":
             self.table_count += 1
+        elif tag == "blockquote":
+            self.blockquote_count += 1
         elif tag == "a" and attrs_dict.get("href"):
             self.link_hrefs.append(attrs_dict["href"])
 
@@ -103,9 +109,10 @@ class ContentCollector(BaseCollector):
         Fetch entity_url and score how citable the page's content is.
 
         Produces: word_count, heading_count, has_h1, statistics_density,
-        list_count, table_count, external_link_count, has_faq_schema,
-        has_article_schema, has_organization_schema, and (only when a
-        <title> is present) title_text as a text-only entry (signal_value=0.0).
+        list_count, table_count, external_link_count, quotation_density,
+        external_citation_density, has_faq_schema, has_article_schema,
+        has_organization_schema, and (only when a <title> is present)
+        title_text as a text-only entry (signal_value=0.0).
 
         Never raises. Any failure (network, timeout, non-200, parse error)
         degrades to a single ContentSignalResult with `error` set. A falsy
@@ -137,6 +144,22 @@ class ContentCollector(BaseCollector):
                 if host and host != page_host:
                     external_links += 1
 
+            # quotation_density: blockquote elements plus inline quoted spans
+            # (straight "..." or curly “...” pairs), per 1000 words.
+            quote_pairs = len(_QUOTE_PAIR_RE.findall(text))
+            quotation_density = (
+                round((parser.blockquote_count + quote_pairs) / word_count * 1000)
+                if word_count
+                else 0
+            )
+
+            # external_citation_density reuses external_links (computed above)
+            # rather than re-scanning text, to avoid double-counting the same
+            # citations.
+            external_citation_density = (
+                round(external_links / word_count * 1000) if word_count else 0
+            )
+
             schema_types = self._extract_jsonld_types(parser.jsonld_blocks)
 
             results = [
@@ -156,6 +179,13 @@ class ContentCollector(BaseCollector):
                 ),
                 ContentSignalResult(
                     signal_key="external_link_count", signal_value=float(external_links)
+                ),
+                ContentSignalResult(
+                    signal_key="quotation_density", signal_value=float(quotation_density)
+                ),
+                ContentSignalResult(
+                    signal_key="external_citation_density",
+                    signal_value=float(external_citation_density),
                 ),
                 ContentSignalResult(
                     signal_key="has_faq_schema",

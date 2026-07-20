@@ -114,3 +114,80 @@ def test_content_collector_missing_title_skips_title_text(test_settings):
 
     by_key = {r.signal_key: r for r in results}
     assert "title_text" not in by_key
+
+
+def test_content_collector_existing_signals_unchanged_on_canned_html(test_settings):
+    """New signal_keys must not disturb any pre-existing signal on the same
+    canned HTML fixture used by the happy-path test."""
+    collector = ContentCollector(test_settings)
+
+    with patch(
+        "provenance.collectors.content.requests.get",
+        return_value=_fake_response(_CANNED_HTML),
+    ):
+        results = collector.collect("https://acme.example.com/")
+
+    by_key = {r.signal_key: r for r in results}
+    assert by_key["heading_count"].signal_value == 2.0
+    assert by_key["has_h1"].signal_value == 1.0
+    assert by_key["list_count"].signal_value == 2.0
+    assert by_key["table_count"].signal_value == 1.0
+    assert by_key["external_link_count"].signal_value == 1.0
+    assert by_key["statistics_density"].signal_value > 0.0
+    assert by_key["title_text"].signal_text == "Acme Graph Database Docs"
+
+    # _CANNED_HTML has no blockquotes and no literal quote characters, so
+    # quotation_density is 0; external_citation_density derives from the
+    # already-verified external_link_count and word_count.
+    assert by_key["quotation_density"].signal_value == 0.0
+    word_count = by_key["word_count"].signal_value
+    external_links = by_key["external_link_count"].signal_value
+    expected_citation_density = round(external_links / word_count * 1000)
+    assert by_key["external_citation_density"].signal_value == float(expected_citation_density)
+
+
+def test_content_collector_quotation_density(test_settings):
+    collector = ContentCollector(test_settings)
+    html = (
+        "<html><body>"
+        "<blockquote>Quote one</blockquote>"
+        "<blockquote>Quote two</blockquote>"
+        '<p>She said "quoted phrase" today.</p>'
+        "</body></html>"
+    )
+
+    with patch(
+        "provenance.collectors.content.requests.get", return_value=_fake_response(html)
+    ):
+        results = collector.collect("https://acme.example.com/")
+
+    by_key = {r.signal_key: r for r in results}
+    # text: "Quote one Quote two She said "quoted phrase" today." -> 9 words.
+    # 2 blockquotes + 1 inline quoted pair = 3 quotation occurrences.
+    # density = round(3 / 9 * 1000) = 333.
+    assert by_key["word_count"].signal_value == 9.0
+    assert by_key["quotation_density"].signal_value == 333.0
+
+
+def test_content_collector_external_citation_density(test_settings):
+    collector = ContentCollector(test_settings)
+    html = (
+        "<html><body>"
+        "<p>Hello world this is text.</p>"
+        '<a href="https://other.example.com/a">A</a>'
+        '<a href="https://other.example.com/b">B</a>'
+        '<a href="https://other.example.com/c">C</a>'
+        "</body></html>"
+    )
+
+    with patch(
+        "provenance.collectors.content.requests.get", return_value=_fake_response(html)
+    ):
+        results = collector.collect("https://acme.example.com/")
+
+    by_key = {r.signal_key: r for r in results}
+    # text: "Hello world this is text. A B C" -> 8 words, 3 external links.
+    # density = round(3 / 8 * 1000) = 375.
+    assert by_key["word_count"].signal_value == 8.0
+    assert by_key["external_link_count"].signal_value == 3.0
+    assert by_key["external_citation_density"].signal_value == 375.0
