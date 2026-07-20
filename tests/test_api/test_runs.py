@@ -448,3 +448,55 @@ def test_get_action_report_missing_run_returns_404(client):
 
     assert response.status_code == 404
     assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# Composite GEO score endpoint: GET /runs/{run_id}/geo-score
+# ---------------------------------------------------------------------------
+
+
+def test_get_geo_score_computes_from_available_signals(client, session, make_entity, make_run):
+    entity = make_entity()
+    run = make_run(entity.id, status=RunStatus.completed)
+    session.add(
+        DivergenceScore(
+            run_id=run.id,
+            entity_id=entity.id,
+            demand_llm_alignment_score=0.9,
+            divergence_direction="aligned",
+            cross_query_stability=1.0,
+            average_recommendation_rank=1.0,
+            probes_included=0,
+        )
+    )
+    session.commit()
+
+    response = client.get(f"/v1/runs/{run.id}/geo-score")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == run.id
+    assert set(body["missing_signals"]) == {"content_quality", "authority"}
+    names = {c["name"] for c in body["components"]}
+    assert names == {"alignment", "stability", "visibility", "content_quality", "authority"}
+    assert body["band"] in {"excellent", "good", "foundation", "critical"}
+
+
+def test_get_geo_score_no_signals_returns_critical_band(client, make_entity, make_run):
+    entity = make_entity()
+    run = make_run(entity.id)
+
+    response = client.get(f"/v1/runs/{run.id}/geo-score")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["geo_score"] == 0.0
+    assert body["band"] == "critical"
+    assert len(body["missing_signals"]) == 5
+
+
+def test_get_geo_score_missing_run_returns_404(client):
+    response = client.get("/v1/runs/999999/geo-score")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "RUN_NOT_FOUND"

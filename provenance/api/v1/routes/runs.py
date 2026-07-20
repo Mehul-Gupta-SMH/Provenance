@@ -15,6 +15,8 @@ from provenance.core.action_report import RunNotFoundError as ActionReportRunNot
 from provenance.core.citation_analytics import CitationAnalytics, CitationAnalyticsEngine
 from provenance.core.divergence import DivergenceEngine
 from provenance.core.divergence import RunNotFoundError as DivergenceRunNotFoundError
+from provenance.core.geo_score import GeoScore, GeoScoreEngine
+from provenance.core.geo_score import RunNotFoundError as GeoScoreRunNotFoundError
 from provenance.models.citation import CitationRead
 from provenance.models.data_point import DataPointRead
 from provenance.models.database import engine, get_session
@@ -187,6 +189,17 @@ def list_datapoints(
     try:
         return signal_service.list_datapoints_for_run(run_id, session, signal_family=signal_family)
     except SignalRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
+        ) from exc
+
+
+@router.get("/{run_id}/geo-score", response_model=GeoScore)
+def get_geo_score(run_id: int, session: Session = Depends(get_session)) -> GeoScore:
+    try:
+        return GeoScoreEngine(session).compute(run_id)
+    except GeoScoreRunNotFoundError as exc:
         raise HTTPException(
             status_code=404,
             detail={"error": "RUN_NOT_FOUND", "detail": str(exc)},
