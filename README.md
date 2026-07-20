@@ -65,7 +65,8 @@ The API is organized around a five-stage loop — each stage is a set of endpoin
 | LLM Probing | Anthropic Claude (v1), OpenAI + Gemini (stubbed) |
 | Demand Signals | pytrends (Google Trends) |
 | Social Signals | Hacker News (keyless Algolia API) → `DataPoint` EAV store |
-| Content Signals | Own-site citability audit (statistics, headings, JSON-LD schema) → `DataPoint` |
+| Content Signals | Own-site citability audit (statistics, quotation & citation density, headings, JSON-LD schema) → `DataPoint` |
+| Discoverability | AI-bot access (robots.txt), `llms.txt`, JSON-LD, `.well-known` AI endpoints → `DataPoint` |
 | Background work | FastAPI background tasks (v1), Celery/Redis (v2) |
 
 ---
@@ -191,9 +192,10 @@ All routes are versioned under `/v1/`. Error responses use a structured body: `{
 | `GET` | `/v1/runs/{run_id}/signals` | — | `200` `List[LLMSignalRead]` (extracted recommendation signals; `co_mentioned_entities` deserialized), or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/citations` | — | `200` `List[CitationRead]`, or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/demand` | — | `200` `List[DemandSignalRead]` (`related_queries` / `geographic_distribution` deserialized), or `404 RUN_NOT_FOUND` |
-| `GET` | `/v1/runs/{run_id}/datapoints` | Query: `signal_family?` | `200` `List[DataPointRead]` (EAV signal rows, e.g. `signal_family=social` HN mentions/points, or `signal_family=content` own-site citability signals), or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/datapoints` | Query: `signal_family?` | `200` `List[DataPointRead]` (EAV signal rows, e.g. `signal_family=social` HN mentions/points, `signal_family=content` own-site citability signals, or `signal_family=discoverability` AI-bot/schema audit), or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/citation-analytics` | — | `200` `CitationAnalytics` (top cited domains for the run + per-domain content-type distribution), or `404 RUN_NOT_FOUND` |
 | `GET` | `/v1/runs/{run_id}/report` | — | `200` `ActionReport` (headline gap, prioritized levers grounded in the run's signals, competitor pressure, auditable `signals_considered`), or `404 RUN_NOT_FOUND` |
+| `GET` | `/v1/runs/{run_id}/geo-score` | — | `200` `GeoScore` (composite 0–100 with weighted sub-components — visibility/alignment/content_quality/authority/stability — a band, and `missing_signals`), or `404 RUN_NOT_FOUND` |
 
 ### Analysis (`/v1/analysis`)
 

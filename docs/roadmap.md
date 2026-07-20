@@ -30,13 +30,13 @@ robots.txt weighting hinges on the four **citation bots** specifically (`OAI-Sea
 
 ## Prioritized backlog
 
-Shipped post-v1: raw signal inspection · context sweep · experiment analytics (comparison/drift) · social collector (DataPoint) · action report · **citation-domain analytics** · **content/citability collector** · **entity aliases**.
+Shipped post-v1: raw signal inspection · context sweep · experiment analytics (comparison/drift) · social collector (DataPoint) · action report · citation-domain analytics · content/citability collector · entity aliases · **discoverability collector** · **composite 0–100 GEO score** · **content density signals (quotation/citation)**.
 
 | Rank | Feature | Seam | Effort | Migration |
 |---|---|---|---|---|
-| 1 | **Discoverability collector** (robots.txt bot tiers, llms.txt, JSON-LD, `.well-known`) | `collectors/discoverability.py` → `DataPoint(signal_family="discoverability")` | S | No |
-| 2 | **Composite 0–100 GEO score** (named weighted sub-components, bands) | read-time `core/geo_score.py`, `GET /v1/runs/{id}/geo-score` | M | No |
-| 3 | **Content density signals** (quotation / statistic / external-citation density) | extend `collectors/content.py` | S | No |
+| ~~1~~ ✅ | **Discoverability collector** (robots.txt bot tiers, llms.txt, JSON-LD, `.well-known`) | `collectors/discoverability.py` → `DataPoint(signal_family="discoverability")` | S | No |
+| ~~2~~ ✅ | **Composite 0–100 GEO score** (named weighted sub-components, bands) | read-time `core/geo_score.py`, `GET /v1/runs/{id}/geo-score` | M | No |
+| ~~3~~ ✅ | **Content density signals** (quotation / statistic / external-citation density) | extend `collectors/content.py` | S | No |
 | 4 | **LLM-generated query variants** (diversity-optimized, hybrid with the 4 fixed templates) | `core/query_generation.py` + pipeline flag | M | No |
 | 5 | **Position-adjusted visibility metric** folded into divergence/fingerprint | `core/divergence.py` + `DataPoint(signal_family="visibility")` | M | No |
 | 6 | **CI regression-gate** endpoint (`min_score`, sarif/junit output) | `core/gating.py`, `POST /v1/runs/{id}/gate` | S | No |
